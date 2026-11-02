@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GridFly</title>
+  <meta name="description" content="Free, open-source mapping mission planner for DJI Fly waypoint KMZ files.">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/jszip/jszip.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body data-ui="easy">
+<aside id="panel">
+  <header class="brand">
+    <div class="row between">
+      <h1>GridFly</h1>
+      <div class="seg2" id="modeSeg" role="group" aria-label="Mode">
+        <button data-ui="easy" title="Step-by-step guide with sensible defaults">Easy</button>
+        <button data-ui="adv" title="All the settings at once">Advanced</button>
+      </div>
+    </div>
+    <p>Free, open-source mapping missions for DJI Fly</p>
+    <div class="toolbar">
+      <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+      <span class="seg2" id="unitSeg" role="group" aria-label="Units">
+        <button data-unit="m" title="Show metres">m</button>
+        <button data-unit="ft" title="Show feet">ft</button>
+      </span>
+      <details class="menu" id="projMenu">
+        <summary>Project</summary>
+        <div class="menubody">
+          <button id="btnSaveProject" title="Save everything to a .gridfly.json file">Save project file</button>
+          <button id="btnOpenProject" title="Open a saved .gridfly.json file">Open project file…</button>
+          <button id="btnStartOver" title="Clear the area and mission">Start over</button>
+        </div>
+      </details>
+      <details class="menu" id="exportMenu">
+        <summary>Export</summary>
+        <div class="menubody">
+          <button id="expKmz" title="DJI Fly mission files (a zip if there is more than one)">KMZ (all missions)</button>
+          <button id="expSd" title="For the standard DJI RC: files plus instructions">microSD package</button>
+          <button id="expKml" title="Open in Google Earth">KML (Google Earth)</button>
+          <button id="expGeo" title="For GIS programs">GeoJSON</button>
+        </div>
+      </details>
+      <button id="btnHelp" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+      <button id="btnTour" title="Show the quick tour">Tour</button>
+    </div>
+    <input type="file" id="projectInput" accept=".json" hidden>
+  </header>
+
+  <div id="restoreNote" class="note" hidden>
+    <span>Restored your last project.</span>
+    <button id="btnRestoreStart" class="link">Start over</button>
+    <button id="btnRestoreClose" class="link" aria-label="Dismiss">Dismiss</button>
+  </div>
+
+  <nav id="stepper" class="easy-only" aria-label="Steps"></nav>
+
+  <section class="adv-only" id="advOpen">
+    <h2>Open a mission file</h2>
+    <div class="row">
+      <button id="btnOpen" class="primary" data-help="Open a mission you saved in DJI Fly (.kmz) to edit it, or a KML area.">Open KMZ / KML…</button>
+      <button id="btnNew" title="Clear everything">New</button>
+    </div>
+    <p id="missionInfo" class="muted">Open a mission saved by DJI Fly, drop a file on the map, or draw an area.</p>
+  </section>
+
+  <section class="step" data-step="1">
+    <h2 data-help="GridFly uses this to pick the right camera numbers and to show the right way to copy the mission onto your controller.">1 · Your drone &amp; controller</h2>
+    <label>Drone
+      <select id="droneKey"></select>
+    </label>
+    <label>Controller
+      <select id="controller"></select>
+    </label>
+    <p id="controllerNote" class="muted small"></p>
+  </section>
+
+  <section class="step" data-step="2">
+    <h2 data-help="Find your site, then mark the area to map. You can also import a KML or KMZ drawn in Google Earth.">2 · Where</h2>
+    <form id="searchForm" class="row">
+      <input id="search" type="search" placeholder="Find a place or lat, lon…" autocomplete="off" aria-label="Find a place">
+      <button type="submit">Go</button>
+    </form>
+    <div class="tools" id="areaTools">
+      <button data-tool="draw" title="Click corners one by one">Polygon</button>
+      <button data-tool="rect" title="Drag a rectangle">Rectangle</button>
+      <button data-tool="circle" title="Drag from the centre outwards">Circle</button>
+      <button data-tool="line" title="For roads, rivers and fences">Line</button>
+      <button data-tool="center" title="For orbiting one building">Orbit centre</button>
+    </div>
+    <div class="row">
+      <button id="btnImport" title="Use an area from Google Earth, or open a DJI mission">Import KML/KMZ…</button>
+      <button id="btnLocate" title="Centre the map on where you are">Use my location</button>
+      <button id="btnClearArea">Clear</button>
+      <button id="btnHull" class="adv-only" title="Use the outline of the current waypoints">From waypoints</button>
+    </div>
+    <input type="file" id="fileInput" accept=".kmz,.kml" hidden>
+    <p id="areaInfo" class="muted"></p>
+  </section>
+
+  <section class="step" data-step="3">
+    <h2 data-help="Each choice sets sensible camera overlap and flight pattern. You can fine-tune everything in Advanced mode.">3 · What are you mapping?</h2>
+    <div id="goalCards" class="cards"></div>
+    <div data-for="3d" class="card">
+      <label class="check" data-help="Fly the area twice, crossing each other. Gives much better 3D models of buildings and trees."><input id="crosshatch" type="checkbox" checked> Crossing passes (recommended for 3D)</label>
+      <label class="check" data-help="Four extra passes with the camera tilted 45 degrees, looking at walls. Many more photos, much better building sides."><input id="oblique" type="checkbox"> Add angled passes for building walls</label>
+    </div>
+    <div data-for="orbit" class="card grid2">
+      <label>Orbit radius (<span class="u-len">m</span>)<input id="orbitRadius" type="number" data-len data-min="10" data-max="200" value="40"></label>
+      <label>Building height (<span class="u-len">m</span>)<input id="bldgHeight" type="number" data-len data-min="3" data-max="150" value="20"></label>
+    </div>
+    <div data-for="corridor" class="card">
+      <label>Strip width to cover (<span class="u-len">m</span>) <input id="corridorWidth" type="number" data-len data-min="10" data-max="500" value="60"></label>
+    </div>
+  </section>
+
+  <section class="step" data-step="4">
+    <h2 data-help="Higher quality means flying lower, which gives finer detail but needs more photos and more batteries.">4 · Quality &amp; flight</h2>
+    <div id="qualityBox">
+      <label>Quality: <b id="qualityName"></b>
+        <input id="quality" type="range" min="0" max="2" step="1" value="1" aria-label="Quality">
+      </label>
+      <div class="rangeLabels"><span>Fast</span><span>Balanced</span><span>Detailed</span></div>
+    </div>
+    <div id="plainResult" class="result"></div>
+
+    <div class="seg" id="dirSeg">
+      <button data-dir="auto" title="Direction with the fewest flight lines">Auto</button>
+      <button data-dir="ns">North–South</button>
+      <button data-dir="ew">East–West</button>
+      <button data-dir="custom">Custom</button>
+    </div>
+    <label id="angleWrap">Bearing <span id="angleVal"></span>
+      <input id="angle" type="range" min="0" max="179" step="1" value="0">
+    </label>
+
+    <label data-help="Photo at every waypoint is the most reliable. Timer photos use far fewer waypoints for big areas, but you start DJI Fly's Timed Shot yourself.">Photos
+      <select id="captureMode">
+        <option value="auto">Automatic (recommended)</option>
+        <option value="waypoint">Photo at every waypoint</option>
+        <option value="timer">Timer photos (fewer waypoints)</option>
+      </select>
+    </label>
+    <p id="captureNote" class="muted small"></p>
+    <div id="timerNotice" class="notice" hidden></div>
+    <label class="check" data-help="The drone stops for one second before each photo. Sharper photos, but the flight takes longer."><input id="hover" type="checkbox"> Extra sharp photos (pause 1 s at each photo)</label>
+    <label class="check" data-help="Changes the flying height as the ground rises and falls, so the picture detail stays even and the drone stays a safe height above the ground."><input id="terrain" type="checkbox" checked> Follow the ground (keep the same height above it)</label>
+    <div class="row">
+      <button id="btnHome" data-tool="home" data-help="Heights are measured from where you take off. Put the H marker where you will actually stand and launch.">Set takeoff point</button>
+      <button id="btnGenerate" class="primary" hidden>Generate flight plan</button>
+    </div>
+    <p id="homeInfo" class="muted small"></p>
+    <p id="terrainStatus" class="muted small"></p>
+    <ul id="warnings" class="warnings"></ul>
+
+    <div class="adv-only" id="advSettings">
+      <h3>Camera &amp; overlap</h3>
+      <label>Camera
+        <select id="camera"></select>
+      </label>
+      <div id="customCam" class="grid2" hidden>
+        <label>Sensor width (mm)<input id="camW" type="number" step="0.01" value="17.3"></label>
+        <label>Sensor height (mm)<input id="camH" type="number" step="0.01" value="13"></label>
+        <label>Focal length (mm)<input id="camF" type="number" step="0.01" value="12.29"></label>
+        <label>Image width (px)<input id="camPx" type="number" step="1" value="5280"></label>
+      </div>
+      <div class="grid2">
+        <label data-help="How high the drone flies above the ground. Lower = sharper detail but more photos.">Height above ground (<span class="u-len">m</span>)<input id="alt" type="number" data-len data-min="5" data-max="500" value="70"></label>
+        <label data-help="Flight speed in metres per second. Slower is safer for sharp photos.">Speed (m/s)<input id="speed" type="number" min="1" max="15" step="0.5" value="5"></label>
+        <label data-help="How much each photo overlaps the next one along the flight line. 75 to 80 is good for most sites.">Front overlap (%)<input id="front" type="number" min="0" max="95" step="1" value="75"></label>
+        <label data-help="How much neighbouring flight lines overlap. 65 to 70 is good for most sites.">Side overlap (%)<input id="side" type="number" min="0" max="95" step="1" value="65"></label>
+        <label data-help="Fly this far past the edge of the area on each line.">Overshoot (<span class="u-len">m</span>)<input id="overshoot" type="number" data-len data-min="0" data-max="100" value="0"></label>
+        <label data-help="Extra distance added around your area so the edges are covered by enough photos. Automatic uses half the photo width.">Edge margin (<span class="u-len">m</span>)<input id="margin" type="number" data-len data-min="0" data-max="300" value="0"></label>
+      </div>
+      <label class="check"><input id="marginAuto" type="checkbox" checked> Automatic edge margin</label>
+      <div class="grid2">
+        <label data-help="DJI Fly allows at most about 400 waypoints in one mission; 200 is a safe default.">Max waypoints per mission<input id="maxWp" type="number" min="2" max="400" step="1" value="200"></label>
+        <label data-help="Splits the plan into missions that fit one battery. 0 turns the time limit off.">Max minutes per battery (0 = off)<input id="maxMin" type="number" min="0" max="45" step="1" value="25"></label>
+      </div>
+      <p id="camInfo" class="metrics"></p>
+    </div>
+  </section>
+
+  <section class="adv-only" id="advWp">
+    <h2>Waypoints &amp; actions</h2>
+    <label data-help="Straight lines give the cleanest map. Curved paths cut corners, and DJI Fly ignores photo actions on them.">Path style
+      <select id="turnMode">
+        <option value="straight-stop">Straight lines, stop at each point (sharpest photos)</option>
+        <option value="straight-pass">Straight lines, fly through points (faster)</option>
+        <option value="curved">Curved (DJI Fly default)</option>
+        <option value="keep">Keep what the file has</option>
+      </select>
+    </label>
+    <div class="row">
+      <button id="btnStraighten" title="Line up wobbly points and switch to straight segments">Straighten paths</button>
+      <button id="btnPhotoAll">Photo at every point</button>
+      <button id="btnPhotoNone">No photos</button>
+    </div>
+    <div class="row">
+      <button id="btnSpeedAll">Apply speed to all</button>
+      <button id="btnAddMode" data-tool="add" title="Click the map to add waypoints after the selected one">Add points</button>
+      <button id="btnReverse">Reverse order</button>
+    </div>
+    <div class="grid2">
+      <label data-help="-90 looks straight down, which is right for maps.">Gimbal pitch (°)<input id="gimbal" type="number" min="-90" max="0" step="1" value="-90"></label>
+      <label>When finished
+        <select id="finish">
+          <option value="goHome">Return to home</option>
+          <option value="noAction">Hover</option>
+          <option value="autoLand">Land</option>
+          <option value="gotoFirstWaypoint">Go to first point</option>
+        </select>
+      </label>
+      <label>Signal lost
+        <select id="rcLost">
+          <option value="goBack">Return to home</option>
+          <option value="hover">Hover</option>
+          <option value="landing">Land</option>
+        </select>
+      </label>
+    </div>
+    <div id="selPanel" class="card" hidden>
+      <div class="row between"><b id="selTitle"></b><button id="btnDeselect" class="link">close</button></div>
+      <div class="grid2">
+        <label>Height above takeoff (<span class="u-len">m</span>)<input id="selHeight" type="number" step="0.5" data-len data-step="0.5"></label>
+        <label>Speed (m/s)<input id="selSpeed" type="number" step="0.5" min="1" max="15"></label>
+      </div>
+      <label class="check"><input id="selPhoto" type="checkbox"> Take photo here</label>
+      <p id="selInfo" class="muted small"></p>
+      <div class="row">
+        <button id="btnDelete">Delete (Del)</button>
+        <button id="btnInsert">Insert point after</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="adv-only" id="advTerrain">
+    <h2>Terrain details</h2>
+    <label class="check"><input id="densify" type="checkbox" checked> Add extra points over ridges between waypoints</label>
+    <label>Ridge tolerance (m)<input id="tol" type="number" min="1" max="50" step="1" value="5"></label>
+    <div class="row"><button id="btnHeights" class="primary">Apply heights</button></div>
+    <canvas id="profile" width="600" height="170" hidden></canvas>
+  </section>
+
+  <section class="adv-only" id="advSummary">
+    <h2>Summary</h2>
+    <dl id="stats" class="stats"></dl>
+  </section>
+
+  <section class="step" data-step="5">
+    <h2 data-help="Weather, light, airspace and tall obstacles around your area. These run by themselves once you have an area.">5 · Check the site</h2>
+    <div id="siteBody"></div>
+    <div class="row"><button id="btnSiteRefresh">Check again</button></div>
+  </section>
+
+  <section class="step" data-step="6">
+    <h2 data-help="Instructions for your controller, plus a checklist worked out for this mission.">6 · Get it on your drone</h2>
+    <div id="readyBanner"></div>
+    <div id="deployBody"></div>
+    <h3>Pre-flight checklist</h3>
+    <div id="checklistBtns" class="row" hidden>
+      <button id="btnPrintCl">Print</button>
+      <button id="btnCopyCl">Copy as text</button>
+    </div>
+    <div id="checklistBox" class="checklist-wrap"></div>
+  </section>
+
+  <section class="step" data-step="7">
+    <h2 data-help="Pick the photos from the SD card (a whole folder is fine). GridFly looks for gaps and blurry shots so you can fix them while still on site.">7 · After the flight</h2>
+    <div id="photoDrop" class="drop">
+      <p>Copy the photos to your computer, then choose them here, or drop them on this box. Nothing is uploaded: the check runs in your browser.</p>
+      <div class="row">
+        <label class="btnlike primary">Choose photo folder<input id="photoDir" type="file" accept="image/jpeg" webkitdirectory multiple hidden></label>
+        <label class="btnlike">Choose photos<input id="photoFiles" type="file" accept="image/jpeg,.jpg,.jpeg" multiple hidden></label>
+      </div>
+    </div>
+    <progress id="photoBar" value="0" max="1" hidden></progress>
+    <div id="photoResult"></div>
+  </section>
+
+  <footer class="small muted">
+    GridFly is free software (MIT). Not affiliated with DJI. Always check missions on the controller before flight, keep visual line of sight and follow local rules.
+    Elevation: Open-Meteo / Copernicus DEM. Weather: Open-Meteo. Obstacles: OpenStreetMap. Airspace: FAA (US). Imagery: Esri. Maps: © OpenStreetMap.
+  </footer>
+</aside>
+
+<main id="map"></main>
+<div id="modeBanner" hidden></div>
+<div id="toast" hidden></div>
+<div id="dropHint" hidden>Drop a mission (.kmz / .kml), a project (.json) or your photos</div>
+<div id="tipPop" role="tooltip" hidden></div>
+
+<div id="help" class="overlay" hidden>
+  <div class="dialog" role="dialog" aria-label="Keyboard shortcuts">
+    <h2>Keyboard shortcuts</h2>
+    <dl class="keys">
+      <dt>Ctrl+Z</dt><dd>Undo</dd>
+      <dt>Ctrl+Y or Ctrl+Shift+Z</dt><dd>Redo</dd>
+      <dt>Delete</dt><dd>Delete the selected waypoint</dd>
+      <dt>Esc</dt><dd>Cancel the current tool, or deselect</dd>
+      <dt>?</dt><dd>Show or hide this help</dd>
+    </dl>
+    <p class="small muted">On the map: right-click an orange corner to remove it; click a small circle between corners to add one; drag the green H to move your takeoff point.</p>
+    <div class="row"><button id="btnHelpClose" class="primary">Close</button></div>
+  </div>
+</div>
+
+<div id="tour" class="overlay" hidden>
+  <div class="dialog" role="dialog" aria-label="Quick tour">
+    <p class="small muted" id="tourCount"></p>
+    <h2 id="tourTitle"></h2>
+    <p id="tourText"></p>
+    <div class="row between"><button id="btnTourSkip" class="link">Skip tour</button><button id="btnTourNext" class="primary">Next</button></div>
+  </div>
+</div>
+</body>
+</html>

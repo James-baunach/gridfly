@@ -1,0 +1,9 @@
+backups/
+__pycache__/
+*.kmz
+
+.build-venv/
+build/
+dist/
+*.spec.bak
+.claude/
