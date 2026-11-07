@@ -3,7 +3,7 @@
 import { haversine, convexHull, pathLength } from './geo.js';
 import { CAMERAS, gridMetrics, autoAngle, snapStraight } from './grid.js';
 import { planGrid, planOblique, planOrbit, planCorridor } from './patterns.js';
-import { applyTerrain } from './terrain.js';
+import { applyTerrain, SOURCES } from './terrain.js';
 import { readFile, buildKmz, DRONES } from './wpml.js';
 import { makeProjection } from './geo.js';
 import { autoMargin, recommendTimer, nearestEdgePoint, curvedRule, GOALS } from './presets.js';
@@ -353,9 +353,12 @@ export async function applyHeights(withUndo = true, token = genToken) {
     state.terrainStale = false;
     state.selected = -1;
     const g = r.waypoints.map(w => w.ground);
-    status.textContent = `Ground varies ${fmtLen(Math.min(...g))} to ${fmtLen(Math.max(...g))} above sea level; takeoff at ${fmtLen(r.homeGround)}.` +
+    state.terrainSource = r.source;
+    status.textContent = `Ground heights: ${SOURCES[r.source].short}. Ground varies ${fmtLen(Math.min(...g))} to ${fmtLen(Math.max(...g))} above sea level; takeoff at ${fmtLen(r.homeGround)}.` +
       (r.inserted ? ` Added ${r.inserted} terrain point${r.inserted > 1 ? 's' : ''} over ridges.` : '') +
-      ' Elevation data is coarse (~30 m) and ignores trees and buildings; leave a margin.';
+      (r.source === 'ky' ? ' LiDAR ground heights are accurate, but trees and buildings are not included: your height above ground must also clear the treetops.'
+        : ' This data is coarse and ignores trees and buildings; leave a generous margin.') +
+      (r.note ? ' ' + r.note : '');
     emit('render');
   } catch (e) {
     status.textContent = 'Ground heights not available: ' + e.message;

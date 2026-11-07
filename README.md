@@ -87,6 +87,7 @@ Run `build_exe.bat` (needs Python and internet once). It creates `.build-venv`, 
 - *Straight lines, stop at each point* gives the sharpest photos. *Fly through points* is faster, but keep photos at least ~2 s apart (GridFly warns you).
 - Put the **H** marker where you will actually take off before applying terrain heights. Every height is measured from there.
 - The elevation data (Copernicus DEM, ~30–90 m) does not include trees or buildings, so leave plenty of margin.
+- **In Kentucky** GridFly uses the state's KyFromAbove LiDAR ground model (2 ft) instead, whenever it covers the whole mission and the takeoff point. It is far more accurate (on a test site at Frankfort the worldwide data put the drone up to 34 m off its planned height), and *Save for offline* keeps it on the device. It is bare earth: trees and buildings are not in it, so your height above ground must still clear the canopy. A mission that crosses the state line uses the worldwide data for all of it, so heights never mix two sources.
 - Fly split missions from the same takeoff point.
 
 ## How it works
@@ -95,7 +96,8 @@ Run `build_exe.bat` (needs Python and internet once). It creates `.build-venv`, 
 | --- | --- |
 | `web/js/wpml.js` | Reads and writes DJI WPML (`wpmz/template.kml` + `wpmz/waylines.wpml`). When editing a DJI Fly file, its first waypoint is cloned as the template for every new one, so fields that depend on the firmware are kept. |
 | `web/js/grid.js` | Camera footprint/GSD maths, grid generation, path straightening |
-| `web/js/terrain.js` | Elevation from the [Open-Meteo](https://open-meteo.com/en/docs/elevation-api) API, sampled on a ~40 m lattice and interpolated |
+| `web/js/terrain.js` | Elevation from the [Open-Meteo](https://open-meteo.com/en/docs/elevation-api) API, sampled on a ~40 m lattice and interpolated; in Kentucky, LiDAR tiles from `web/js/lidar-ky.js` |
+| `web/js/lidar-ky.js` | Kentucky LiDAR ([KyFromAbove](https://kyfromabove.ky.gov/)) tiles: fetched from the state's elevation image service, kept on the device and sampled locally |
 | `web/js/app.js` | Map UI (Leaflet) |
 | `web/sw.js` | Service worker: keeps the app and map tiles available offline |
 | `web/js/offline.js`, `web/js/ui-offline.js`, `web/js/store.js` | Tile maths, the Offline panel (saving areas, install, updates) and the IndexedDB store for saved elevations and site checks |

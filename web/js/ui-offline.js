@@ -2,7 +2,7 @@
 // and the Offline panel that saves an area (map tiles, ground heights, site check) for use with no signal.
 
 import { TILE_LAYERS, TILE_HARD_CAP, MAX_NATIVE_ZOOM, boundsOf, bufferBounds, downloadPlan, countTiles, tilesOf, tileUrl, chooseMaxZoom, metresPerPixel, planHasTile, fmtBytes } from './offline.js';
-import { prefetchArea, storedFraction } from './terrain.js';
+import { prefetchArea, storedFraction, SOURCES } from './terrain.js';
 import * as store from './store.js';
 import { haversine, centroid } from './geo.js';
 import { $, state, on, toast, esc, isStandalone } from './state.js';
@@ -184,9 +184,9 @@ async function saveArea() {
     if (tiles.failed) notes.push(`${tiles.failed} map tile${tiles.failed > 1 ? 's' : ''} could not be saved.`);
 
     msg.textContent = 'Saving ground heights…';
-    let elevOk = false;
+    let elevOk = false, elevSource = null;
     try {
-      await prefetchArea(bufferBounds(t.bounds, 300), (n, total) => { bar.value = 0.8 + 0.1 * n / total; msg.textContent = `Saving ground heights… ${n} of ${total}`; });
+      ({ source: elevSource } = await prefetchArea(bufferBounds(t.bounds, 300), (n, total) => { bar.value = 0.8 + 0.1 * n / total; msg.textContent = `Saving ground heights… ${n} of ${total}`; }));
       elevOk = true;
     } catch (e) { notes.push('Ground heights: ' + e.message); }
     if (cancelled()) throw new Error('cancelled');
@@ -200,9 +200,9 @@ async function saveArea() {
     }
     bar.value = 1;
 
-    const area = { id: Date.now().toString(36), name, created: Date.now(), bounds: t.bounds, maxZoom, parts, layer: LAYER, tiles: tiles.total - tiles.failed, bytes: tiles.bytes, elevOk, siteOk };
+    const area = { id: Date.now().toString(36), name, created: Date.now(), bounds: t.bounds, maxZoom, parts, layer: LAYER, tiles: tiles.total - tiles.failed, bytes: tiles.bytes, elevOk, elevSource, siteOk };
     await store.set('areas', area.id, area);
-    msg.innerHTML = `<b>Saved “${esc(name)}”</b>: ${area.tiles} tiles (${fmtBytes(tiles.bytes)})${elevOk ? ', ground heights' : ''}${siteOk ? ', site check' : ''}.` +
+    msg.innerHTML = `<b>Saved “${esc(name)}”</b>: ${area.tiles} tiles (${fmtBytes(tiles.bytes)})${elevOk ? `, ground heights (${SOURCES[elevSource].short})` : ''}${siteOk ? ', site check' : ''}.` +
       (notes.length ? `<br>${notes.map(esc).join('<br>')}` : '');
     toast(`Saved “${name}” for offline use.`);
   } catch (e) {
@@ -241,7 +241,7 @@ async function renderList() {
   if (!areas.length) { box.innerHTML = '<p class="muted small">Nothing saved yet.</p>'; return; }
   const ground = await Promise.all(areas.map(a => storedFraction(bufferBounds(a.bounds, 300)).catch(() => 0)));
   box.innerHTML = areas.map((a, i) => `<div class="saved-area">
-      <div class="name"><b>${esc(a.name)}</b><br><span class="small muted">${new Date(a.created).toLocaleDateString()} · ${a.tiles} tiles, ${fmtBytes(a.bytes)}${ground[i] > 0.98 ? ' · ground heights' : ''}${a.siteOk ? ' · site check' : ''}</span></div>
+      <div class="name"><b>${esc(a.name)}</b><br><span class="small muted">${new Date(a.created).toLocaleDateString()} · ${a.tiles} tiles, ${fmtBytes(a.bytes)}${ground[i] > 0.98 ? (a.elevSource === 'ky' ? ' · Kentucky LiDAR' : ' · ground heights') : ''}${a.siteOk ? ' · site check' : ''}</span></div>
       <button data-go="${a.id}">Show</button><button data-del="${a.id}" class="link">Delete</button>
     </div>`).join('');
   box.querySelectorAll('[data-go]').forEach(b => b.onclick = () => {

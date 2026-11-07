@@ -9,7 +9,7 @@
  * - Everything else (the USB helper's /api/, weather and other services) goes straight to the network;
  *   the app keeps its own offline copies of that data in IndexedDB.
  */
-const VERSION = '2026-11-06.2';
+const VERSION = '2026-11-06.3';
 const SHELL_CACHE = 'gridfly-shell-' + VERSION;
 const TILES_SAVED = 'gridfly-tiles-saved';
 const TILES_SEEN = 'gridfly-tiles-seen';
@@ -31,6 +31,7 @@ const SHELL = [
   'js/geo.js',
   'js/grid.js',
   'js/installer.js',
+  'js/lidar-ky.js',
   'js/offline.js',
   'js/patterns.js',
   'js/photocheck.js',
