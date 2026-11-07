@@ -1,12 +1,16 @@
 // Ground elevation lookup (Open-Meteo, Copernicus GLO-90 DEM) and terrain-following heights.
 
 import { haversine } from './geo.js';
+import { latticeNodes } from './offline.js';
+import * as store from './store.js';
 
 const API = 'https://api.open-meteo.com/v1/elevation';
 const BATCH = 100; // API limit per request
 // The DEM is 30-90 m resolution, so sample a ~40 m lattice and interpolate between nodes
 // instead of querying every waypoint (keeps big grids within the API's rate limits).
-const CELL = 0.0004;
+export const CELL = 0.0004;
+const SAVE_HINT = 'Save the area for offline use while you have signal (Offline button), or turn "Follow the ground" off.';
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
 const cache = new Map();
 const nodeKey = (i, j) => i + ',' + j;
 const round1 = v => Math.round(v * 10) / 10;
@@ -18,17 +22,52 @@ async function fetchNodes(keys, onProgress) {
     const url = `${API}?latitude=${chunk.map(c => (c[0] * CELL).toFixed(6)).join(',')}&longitude=${chunk.map(c => (c[1] * CELL).toFixed(6)).join(',')}`;
     let res;
     for (let attempt = 0; attempt < 5; attempt++) {
-      res = await fetch(url);
+      try { res = await fetch(url); }
+      catch {
+        throw new Error(isOffline() ? `You are offline and the ground heights here were not saved. ${SAVE_HINT}`
+          : `Could not reach the elevation service, and the ground heights here were not saved. ${SAVE_HINT}`);
+      }
       if (res.status !== 429) break;
       await sleep(4000 * 2 ** attempt);
     }
     if (!res.ok) throw new Error(`Elevation service error ${res.status}${res.status === 429 ? ' (rate limited, try again in a minute)' : ''}`);
     const data = await res.json();
     if (!Array.isArray(data.elevation)) throw new Error(data.reason || 'Elevation service returned no data');
-    data.elevation.forEach((e, j) => cache.set(keys[i + j], e));
+    const got = data.elevation.map((e, j) => [keys[i + j], e]);
+    got.forEach(([k, e]) => cache.set(k, e));
+    await store.setMany('elev', got); // kept for offline use
     onProgress?.(Math.min(keys.length, i + BATCH), keys.length);
     if (i + BATCH < keys.length) await sleep(250);
   }
+}
+
+// Moves nodes saved on this device into the memory cache and removes them from `need`.
+async function loadStored(need) {
+  if (!need.size) return;
+  const keys = [...need];
+  const vals = await store.getMany('elev', keys);
+  vals.forEach((v, i) => { if (typeof v === 'number') { cache.set(keys[i], v); need.delete(keys[i]); } });
+}
+
+/**
+ * Saves the ground heights for a whole area so plans there can follow the terrain offline.
+ * Returns the number of lattice nodes covering the area, or throws if the area is too big.
+ */
+export async function prefetchArea(bounds, onProgress, maxNodes = 12000) {
+  const keys = latticeNodes(bounds, CELL);
+  if (keys.length > maxNodes) throw new Error(`The area is too large to save every ground height (${keys.length} points, limit ${maxNodes}).`);
+  const need = new Set(keys.filter(k => !cache.has(k)));
+  await loadStored(need);
+  await fetchNodes([...need], onProgress);
+  return keys.length;
+}
+
+/** How many of the area's ground heights are saved on this device (0..1). */
+export async function storedFraction(bounds) {
+  const keys = latticeNodes(bounds, CELL);
+  if (!keys.length || keys.length > 50000) return 0;
+  const vals = await store.getMany('elev', keys);
+  return vals.filter(v => typeof v === 'number').length / keys.length;
 }
 
 export async function getElevations(points, onProgress) {
@@ -42,6 +81,7 @@ export async function getElevations(points, onProgress) {
     const k = nodeKey(c.i + di, c.j + dj);
     if (!cache.has(k)) need.add(k);
   }
+  await loadStored(need);
   await fetchNodes([...need], onProgress);
   return cells.map(({ i, j, u, v }) => {
     const e = (di, dj) => cache.get(nodeKey(i + di, j + dj));

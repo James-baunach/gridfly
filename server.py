@@ -10,6 +10,7 @@ import argparse
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -37,6 +38,8 @@ BACKUP_RE = re.compile(r"^\d{8}-\d{6}-[0-9A-Fa-f]{8}$")
 HOST_RE = re.compile(r"^(127\.0\.0\.1|localhost)(:\d+)?$")
 MAX_KMZ = 20 * 1024 * 1024
 MTP_LOCK = threading.Lock()  # one device operation at a time
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("text/javascript", ".js")  # Windows registry can map .js to text/plain, which breaks modules
 
 
 def run_ps(*args, timeout=240):

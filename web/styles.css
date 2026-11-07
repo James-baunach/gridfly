@@ -42,6 +42,8 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
+html { height: 100dvh; }
+body { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 body {
   display: flex;
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -228,9 +230,31 @@ button.tip {
 
 .vertex-icon { background: #fff; border: 2px solid #ff9f1c; border-radius: 2px; }
 .mid-icon { background: rgba(255,255,255,.6); border: 1px solid #ff9f1c; border-radius: 50%; }
-.home-icon { background: #12b76a; color: #fff; border: 2px solid #fff; border-radius: 50%; font: 700 12px/20px system-ui; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.home-icon { background: #12b76a; color: #fff; border: 2px solid #fff; border-radius: 50%; font: 700 12px system-ui; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
 .sel-icon { border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 0 2px #1f6feb, 0 1px 6px rgba(0,0,0,.6); }
 .end-icon { color: #fff; border-radius: 4px; font: 700 10px/16px system-ui; text-align: center; border: 1px solid #fff; }
+
+/* Offline */
+#netBadge { margin-left: 6px; vertical-align: middle; border: 0; cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+.dialog.wide { max-width: 520px; max-height: calc(100dvh - 32px); overflow-y: auto; }
+.dialog label input[type=search] { display: block; width: 100%; margin-top: 3px; }
+.saved-area { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.saved-area .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.saved-note { background: var(--mid-bg); color: var(--mid); border-radius: 6px; padding: 4px 8px; }
+.mobile-only { display: none; }
+#btnMapSize { position: fixed; z-index: 1100; right: 10px; width: 44px; height: 44px; padding: 0; font-size: 22px; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.35); background: var(--panel); }
+
+/* Phones and tablets: finger-sized controls. */
+@media (pointer: coarse) {
+  button:not(.tip):not(.link):not(#netBadge), summary, .btnlike, select, input[type=number], input[type=search] { min-height: 40px; }
+  .seg2 button { min-height: 34px; }
+  #stepper button { min-height: 44px; }
+  label.check { min-height: 36px; }
+  label.check input { width: 20px; height: 20px; }
+  button.tip { width: 22px; height: 22px; line-height: 20px; }
+  .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+  .menubody button { padding: 10px 12px; }
+}
 
 @media (max-width: 760px) {
   body { flex-direction: column-reverse; }
@@ -242,4 +266,9 @@ button.tip {
   #stepper button.cur span { display: inline; }
   #stepper button.cur { flex: 3; }
   .grid2 { grid-template-columns: 1fr 1fr; }
+  .mobile-only { display: block; }
+  #btnMapSize { top: calc(42% - 54px + env(safe-area-inset-top)); }
+  body.mapbig #map { height: 72%; }
+  body.mapbig #panel { height: 28%; }
+  body.mapbig #btnMapSize { top: calc(72% - 54px + env(safe-area-inset-top)); }
 }

@@ -13,6 +13,7 @@ import { initSiteCheck } from './ui-sitecheck.js';
 import { initPhotoCheck, runPhotoCheck } from './ui-photocheck.js';
 import { initProject, restoreLast, openProjectFile } from './ui-project.js';
 import { initHelp, toggleHelp } from './ui-help.js';
+import { initOffline, toggle as toggleOffline } from './ui-offline.js';
 
 const { settings, pushUndo, undo, redo, loadFile, saveSettings, SETTING_IDS } = plan;
 
@@ -226,6 +227,7 @@ function bind() {
     else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && state.selected >= 0) { e.preventDefault(); deleteSelected(); }
     else if (e.key === 'Escape') {
       if (!$('help').hidden) toggleHelp(false);
+      else if (!$('offline').hidden) toggleOffline(false);
       else if (state.mode) setMode(null);
       else select(-1);
     } else if (e.key === '?' && !typing) toggleHelp();
@@ -238,14 +240,32 @@ function bind() {
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => {
     e.preventDefault(); depth = 0; $('dropHint').hidden = true;
-    const files = [...e.dataTransfer.files];
-    const first = files.find(f => /\.(kmz|kml)$/i.test(f.name));
-    const proj = files.find(f => /\.json$/i.test(f.name));
-    if (first) loadFile(first);
-    else if (proj) openProjectFile(proj);
-    else if (files.some(f => /\.jpe?g$/i.test(f.name))) { emit('goStep', 7); runPhotoCheck(files); }
-    else if (files.length) toast('GridFly can open .kmz, .kml, .gridfly.json and JPEG photos.');
+    openFiles([...e.dataTransfer.files]);
   });
+
+  // Files opened with the installed app (desktop "Open with GridFly").
+  if ('launchQueue' in window) {
+    window.launchQueue.setConsumer(async params => {
+      if (params.files?.length) openFiles(await Promise.all(params.files.map(h => h.getFile())));
+    });
+  }
+
+  // Phones: make the map bigger or smaller.
+  $('btnMapSize').onclick = () => {
+    const big = document.body.classList.toggle('mapbig');
+    $('btnMapSize').textContent = big ? '⤡' : '⤢';
+    $('btnMapSize').setAttribute('aria-label', big ? 'Make the map smaller' : 'Make the map bigger');
+  };
+}
+
+// Missions, projects or photos, dropped or opened.
+function openFiles(files) {
+  const first = files.find(f => /\.(kmz|kml)$/i.test(f.name));
+  const proj = files.find(f => /\.json$/i.test(f.name));
+  if (first) loadFile(first);
+  else if (proj) openProjectFile(proj);
+  else if (files.some(f => /\.jpe?g$/i.test(f.name))) { emit('goStep', 7); runPhotoCheck(files); }
+  else if (files.length) toast('GridFly can open .kmz, .kml, .gridfly.json and JPEG photos.');
 }
 
 // ---------- Start ----------
@@ -265,6 +285,7 @@ initSiteCheck();
 initPhotoCheck();
 initProject();
 initInstall();
+initOffline();
 emit('render');
 restoreLast().then(restored => initHelp({ firstRun: !restored }));
 

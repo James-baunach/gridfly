@@ -77,7 +77,19 @@ export function debounce(fn, ms) {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
-export function download(blob, name) {
+// Installed on an iPhone or iPad, a download link opens the file in a viewer with no way back to the app,
+// so use the share sheet there (Save to Files, AirDrop, …).
+const isAppleTouch = () => typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+export const isStandalone = () => typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true);
+
+export async function download(blob, name) {
+  if (isAppleTouch() && isStandalone() && navigator.canShare) {
+    const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: name }); return; }
+      catch (e) { if (e.name === 'AbortError') return; /* otherwise fall back to a download link */ }
+    }
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;

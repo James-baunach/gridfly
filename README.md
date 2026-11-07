@@ -21,8 +21,34 @@ Draw an area, get a lawnmower grid with a photo at every point, adjust the heigh
 - **Projects**: your work is autosaved in the browser and restored on the next visit; save or open `.gridfly.json` project files; export KMZ, microSD package, KML (Google Earth) or GeoJSON.
 - Missions are split automatically by waypoint count (up to 400, default 200) and by battery time.
 - Edit single waypoints (drag, delete, insert, height, speed, photo on/off), with undo and redo (Ctrl+Z, Ctrl+Y).
+- **Works offline as an installable app (PWA)** on phones, tablets and laptops: save an area's satellite maps, ground heights and site check before you leave, then plan and adjust missions in the field with no signal.
 
-## Running it
+## Use it in the field (offline app)
+
+GridFly is a Progressive Web App. Once it is hosted on an **https** address (GitHub Pages works, see below), open that address on each device and install it:
+
+- **Android (Chrome):** menu ⋮ → *Install app* (or *Add to Home screen*).
+- **iPhone / iPad (Safari):** Share → *Add to Home Screen*. Exports open the share sheet, so you can *Save to Files*.
+- **Laptop (Chrome / Edge):** the install icon in the address bar. The installed app can also open `.kmz`, `.kml` and `.gridfly.json` files.
+
+The app itself then opens with no signal. Before you head out, while you still have signal:
+
+1. Draw your area (or zoom the map to the site).
+2. Tap **Offline** → **Save for offline**. GridFly saves satellite imagery around the area (plus a wider overview for finding your way), the ground heights for terrain following, and the site check (weather forecast, obstacles, airspace).
+3. In the field you can draw, plan, follow the ground, check photos and export missions. With no signal the site check shows the saved results and how old they are. A saved area can be found again by typing its name in the search box. GPS (*Use my location*) works without signal.
+
+Notes:
+- Place search and fresh forecasts need a connection. Map tiles you have looked at are also kept (the newest 3,000), and zooming past the saved detail enlarges the saved imagery.
+- Saved maps use the device's browser storage. The Offline panel shows how much is used and lets you delete saved areas. GridFly asks the browser to keep the data, but a phone that runs very low on space may still clear it.
+- Satellite imagery comes from Esri World Imagery. Check that its terms suit your use before you save large areas. Street map tiles from OpenStreetMap are only kept as you view them, never bulk-downloaded, as their tile policy requires.
+
+### Hosting on GitHub Pages
+
+`.github/workflows/pages.yml` runs the tests and publishes `web/` on every push to `main`. One-time setup: in the repository on GitHub, go to **Settings → Pages → Source** and pick **GitHub Actions**. The app is then at `https://<user>.github.io/gridfly/`.
+
+When you change any file in `web/`, bump `VERSION` in `web/sw.js` so installed apps pick up the new version. They show a "new version is ready" note. If you add a file, also list it in `SHELL` there; `npm test` checks the list is complete.
+
+## Running it locally
 
 You need [Python 3](https://www.python.org/downloads/) installed. It uses no extra packages.
 
@@ -71,6 +97,8 @@ Run `build_exe.bat` (needs Python and internet once). It creates `.build-venv`, 
 | `web/js/grid.js` | Camera footprint/GSD maths, grid generation, path straightening |
 | `web/js/terrain.js` | Elevation from the [Open-Meteo](https://open-meteo.com/en/docs/elevation-api) API, sampled on a ~40 m lattice and interpolated |
 | `web/js/app.js` | Map UI (Leaflet) |
+| `web/sw.js` | Service worker: keeps the app and map tiles available offline |
+| `web/js/offline.js`, `web/js/ui-offline.js`, `web/js/store.js` | Tile maths, the Offline panel (saving areas, install, updates) and the IndexedDB store for saved elevations and site checks |
 | `server.py` | Local helper that serves the app and runs the installer (install, verify, backups/restore, experimental create). It only listens on 127.0.0.1 and requires a custom header, so other websites can't drive it. |
 | `installer/mtp.ps1` | Copies files to and from the controller over MTP through the Windows Shell |
 

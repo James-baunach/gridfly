@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>GridFly</title>
   <meta name="description" content="Free, open-source mapping mission planner for DJI Fly waypoint KMZ files.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#1f6feb">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="GridFly">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="styles.css">
   <script src="vendor/leaflet/leaflet.js"></script>
@@ -15,7 +23,7 @@
 <aside id="panel">
   <header class="brand">
     <div class="row between">
-      <h1>GridFly</h1>
+      <h1>GridFly <button id="netBadge" class="pill bad" title="No signal. Tap to see what is saved for offline use." hidden>Offline</button></h1>
       <div class="seg2" id="modeSeg" role="group" aria-label="Mode">
         <button data-ui="easy" title="Step-by-step guide with sensible defaults">Easy</button>
         <button data-ui="adv" title="All the settings at once">Advanced</button>
@@ -46,11 +54,17 @@
           <button id="expGeo" title="For GIS programs">GeoJSON</button>
         </div>
       </details>
+      <button id="btnOffline" title="Save areas for use with no signal, install the app">Offline</button>
       <button id="btnHelp" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button id="btnTour" title="Show the quick tour">Tour</button>
     </div>
     <input type="file" id="projectInput" accept=".json" hidden>
   </header>
+
+  <div id="updateNote" class="note" hidden>
+    <span>A new version of GridFly is ready.</span>
+    <button id="btnUpdate" class="link">Reload now</button>
+  </div>
 
   <div id="restoreNote" class="note" hidden>
     <span>Restored your last project.</span>
@@ -98,6 +112,9 @@
       <button id="btnLocate" title="Centre the map on where you are">Use my location</button>
       <button id="btnClearArea">Clear</button>
       <button id="btnHull" class="adv-only" title="Use the outline of the current waypoints">From waypoints</button>
+    </div>
+    <div class="row">
+      <button id="btnOfflineArea" title="Save the maps, ground heights and site check for this area so you can work with no signal">Save area for offline…</button>
     </div>
     <input type="file" id="fileInput" accept=".kmz,.kml" hidden>
     <p id="areaInfo" class="muted"></p>
@@ -290,6 +307,7 @@
 </aside>
 
 <main id="map"></main>
+<button id="btnMapSize" class="mobile-only" aria-label="Make the map bigger" title="Bigger map">⤢</button>
 <div id="modeBanner" hidden></div>
 <div id="toast" hidden></div>
 <div id="dropHint" hidden>Drop a mission (.kmz / .kml), a project (.json) or your photos</div>
@@ -307,6 +325,27 @@
     </dl>
     <p class="small muted">On the map: right-click an orange corner to remove it; click a small circle between corners to add one; drag the green H to move your takeoff point.</p>
     <div class="row"><button id="btnHelpClose" class="primary">Close</button></div>
+  </div>
+</div>
+
+<div id="offline" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-label="Offline use">
+    <div class="row between"><h2>Use GridFly with no signal</h2><button id="btnOfflineClose" class="link">Close</button></div>
+    <div id="offAppStatus"></div>
+    <h3>Save an area before you go</h3>
+    <div id="offAreaInfo"></div>
+    <label>Name<input id="offName" type="search" autocomplete="off"></label>
+    <label>Map detail<select id="offZoom"></select></label>
+    <div class="row">
+      <button id="btnOffSave" class="primary">Save for offline</button>
+      <button id="btnOffCancel" hidden>Stop</button>
+    </div>
+    <progress id="offBar" value="0" max="1" hidden></progress>
+    <p id="offProgress" class="small"></p>
+    <h3>Saved areas</h3>
+    <div id="offList"></div>
+    <p id="offStorage" class="small muted"></p>
+    <p class="small muted">With no signal you can still draw areas, plan, follow the ground (where heights were saved), check photos and export missions. Place search and fresh weather need a connection. Your current project is always kept on this device.</p>
   </div>
 </div>
 

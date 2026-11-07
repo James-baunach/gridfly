@@ -308,7 +308,7 @@ export async function applyHeights(withUndo = true, token = genToken) {
       ' Elevation data is coarse (~30 m) and ignores trees and buildings; leave a margin.';
     emit('render');
   } catch (e) {
-    status.textContent = 'Elevation lookup failed: ' + e.message + ' Check your internet connection, or turn terrain following off.';
+    status.textContent = 'Ground heights not available: ' + e.message;
   } finally {
     $('btnHeights').disabled = false;
   }

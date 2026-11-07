@@ -5,14 +5,17 @@ import { haversine, convexHull } from './geo.js';
 import { circlePolygon, rectPolygon } from './presets.js';
 import { $, state, on, emit, toast, ll, setLen, esc } from './state.js';
 import { computeMissions, pushUndo, settings } from './plan.js';
+import { TILE_LAYERS, MAX_NATIVE_ZOOM } from './offline.js';
+import * as store from './store.js';
+
+// Bigger handles for fingers on phones and tablets.
+const COARSE = window.matchMedia?.('(pointer: coarse)').matches;
 
 export const map = L.map('map', { doubleClickZoom: false, zoomControl: true }).setView([39.5, -98.35], 4);
-const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
-}).addTo(map);
-const streets = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 21, maxNativeZoom: 19, attribution: '© OpenStreetMap contributors',
-});
+// crossOrigin lets the service worker keep the tiles for offline use (see sw.js).
+const tileOpts = t => ({ maxZoom: 21, maxNativeZoom: MAX_NATIVE_ZOOM, attribution: t.attribution, crossOrigin: true });
+const satellite = L.tileLayer(TILE_LAYERS.satellite.url, tileOpts(TILE_LAYERS.satellite)).addTo(map);
+const streets = L.tileLayer(TILE_LAYERS.streets.url, tileOpts(TILE_LAYERS.streets));
 L.control.layers({ Satellite: satellite, Streets: streets }).addTo(map);
 L.control.scale({ imperial: true }).addTo(map);
 state.mapCenter = () => { const c = map.getCenter(); return { lat: c.lat, lon: c.lng }; };
@@ -117,7 +120,7 @@ const editable = () => state.mode === 'draw' || state.mode === 'line' || !state.
 
 function vertexMarkers(list, onChange) {
   list.forEach((p, i) => {
-    const m = L.marker(ll(p), { icon: icon('vertex-icon', 12), draggable: true, zIndexOffset: 500 }).addTo(layers.area);
+    const m = L.marker(ll(p), { icon: icon('vertex-icon', COARSE ? 22 : 12), draggable: true, zIndexOffset: 500 }).addTo(layers.area);
     m.on('dragstart', pushUndo);
     m.on('drag', e => { list[i] = { lat: e.latlng.lat, lon: e.latlng.lng }; layers.area.eachLayer(l => l.setLatLngs?.(list.map(ll))); });
     m.on('dragend', () => { emit('render'); onChange(); });
@@ -135,7 +138,7 @@ export function renderArea() {
     const r = settings().orbitRadius;
     L.circle(ll(state.center), { ...style, radius: r, fillOpacity: 0.04 }).addTo(layers.area);
     if (editable()) {
-      const m = L.marker(ll(state.center), { icon: icon('vertex-icon', 14, '', 'border-radius:50%'), draggable: true, zIndexOffset: 500, title: 'Drag to move the orbit centre' }).addTo(layers.area);
+      const m = L.marker(ll(state.center), { icon: icon('vertex-icon', COARSE ? 24 : 14, '', 'border-radius:50%'), draggable: true, zIndexOffset: 500, title: 'Drag to move the orbit centre' }).addTo(layers.area);
       m.on('dragstart', pushUndo);
       m.on('dragend', e => { const p = e.target.getLatLng(); state.center = { lat: p.lat, lon: p.lng }; emit('render'); emit('plan', { geometry: true }); });
     } else {
@@ -150,7 +153,7 @@ export function renderArea() {
     poly.forEach((p, i) => {
       const q = poly[(i + 1) % poly.length];
       const mid = { lat: (p.lat + q.lat) / 2, lon: (p.lon + q.lon) / 2 };
-      L.marker(ll(mid), { icon: icon('mid-icon', 10), zIndexOffset: 400, title: 'Click to add a corner here' })
+      L.marker(ll(mid), { icon: icon('mid-icon', COARSE ? 18 : 10), zIndexOffset: 400, title: 'Click to add a corner here' })
         .on('click', () => { pushUndo(); poly.splice(i + 1, 0, mid); emit('render'); changed(); })
         .addTo(layers.area);
     });
@@ -196,7 +199,7 @@ export function renderWaypoints() {
 
   if (state.selected >= 0 && wps[state.selected]) {
     const w = wps[state.selected];
-    const m = L.marker(ll(w), { icon: icon('sel-icon', 16, '', `background:${colorOf(state.selected)}`), draggable: true, zIndexOffset: 1000 }).addTo(layers.top);
+    const m = L.marker(ll(w), { icon: icon('sel-icon', COARSE ? 26 : 16, '', `background:${colorOf(state.selected)}`), draggable: true, zIndexOffset: 1000 }).addTo(layers.top);
     m.on('dragstart', pushUndo);
     m.on('dragend', e => {
       const p = e.target.getLatLng();
@@ -210,7 +213,7 @@ export function renderWaypoints() {
   if (state.userLoc) L.circleMarker(ll(state.userLoc), { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6feb', fillOpacity: 1, interactive: false }).addTo(layers.top);
 
   if (state.home) {
-    const h = L.marker(ll(state.home), { icon: icon('home-icon', 22, 'H'), draggable: true, zIndexOffset: 900, title: 'Where you take off (drag to move)' }).addTo(layers.top);
+    const h = L.marker(ll(state.home), { icon: icon('home-icon', COARSE ? 30 : 22, 'H'), draggable: true, zIndexOffset: 900, title: 'Where you take off (drag to move)' }).addTo(layers.top);
     h.on('dragstart', pushUndo);
     h.on('dragend', e => {
       const p = e.target.getLatLng();
@@ -230,6 +233,11 @@ export async function searchPlace(q) {
   if (!q) return;
   const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (m) return map.setView([+m[1], +m[2]], 17);
+  // Saved offline areas can be found by name (any part of it when there is no signal).
+  const lq = q.toLowerCase();
+  const saved = (await store.all('areas')).find(a => a.name.toLowerCase() === lq || (!navigator.onLine && a.name.toLowerCase().includes(lq)));
+  if (saved) return map.fitBounds([[saved.bounds.s, saved.bounds.w], [saved.bounds.n, saved.bounds.e]], { maxZoom: 18 });
+  if (!navigator.onLine) return toast('No signal, so place search is not available. Type coordinates (lat, lon), the name of a saved area, or use "Use my location" (GPS works offline).', 7000);
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`);
     const [hit] = await r.json();
