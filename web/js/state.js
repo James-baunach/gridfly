@@ -34,6 +34,9 @@ export const state = {
   easy: true,
   unit: 'm',
   site: { obstacles: [], airspace: [], airspaceError: null, key: null },
+  progress: null,      // field progress {sig, flown: [missionIndex], resume: {mission, from}} (see plan.js)
+  projectId: null,     // this project's entry in My projects
+  projectName: null,
   mapCenter: () => ({ lat: 40, lon: -100 }),
 };
 

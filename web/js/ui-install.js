@@ -8,7 +8,7 @@ import { buildChecklist, checklistHtml, checklistText } from './checklist.js';
 import * as helper from './installer.js';
 import { CONTROLLERS, HELPER_CONTROLLERS } from './presets.js';
 import { $, state, on, emit, toast, esc, fmtTime, download } from './state.js';
-import { computeMissions, settings, exportOpts, buildMissionFiles, photoEstimate } from './plan.js';
+import { computeMissions, settings, exportOpts, buildMissionFiles, photoEstimate, setFlown, setResume } from './plan.js';
 import { layers, fitTo } from './ui-map.js';
 
 const FINISH = { goHome: 'return to home', noAction: 'hover', autoLand: 'land', gotoFirstWaypoint: 'go to the first point' };
@@ -16,6 +16,7 @@ let results = [];      // install result lines (kept across re-renders)
 let backups = null;
 let experimental = false;
 let busy = false;
+let resumeOpen = null;  // mission index whose "where did it stop?" form is open
 
 export function checklistCtx() {
   const s = settings();
@@ -67,13 +68,42 @@ function missionRows(missions, withSelect) {
     const opts = `<option value="">Don't install</option>` +
       slots.map(s => `<option value="${s.key}" ${state.targets[m.index] === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('') +
       (experimental ? state.controllers.map((c, ci) => `<option value="new|${ci}" ${state.targets[m.index] === `new|${ci}` ? 'selected' : ''}>New mission slot on ${esc(c.device)} (experimental)</option>`).join('') : '');
-    return `<div class="mission-row">
+    const status = m.flown ? ' <span class="pill good">Flown</span>'
+      : m.resumedFrom ? ` <span class="pill ok">Rest from point ${m.resumedFrom + 1}</span>` : '';
+    return `<div class="mission-row${m.flown ? ' flown' : ''}">
       <span class="swatch" style="background:${m.color}"></span>
-      <span class="name">Mission ${m.index + 1}<br><span class="muted small">${m.points.length} points · ${fmtTime(m.time)}</span></span>
+      <span class="name">Mission ${m.index + 1}${status}<br><span class="muted small">${m.resumedFrom ? `points ${m.resumedFrom + 1}–${m.fullCount} of ${m.fullCount}` : `${m.points.length} points`} · ${fmtTime(m.time)}</span></span>
       ${withSelect && state.controllers.length ? `<select data-target="${m.index}" aria-label="Where to install mission ${m.index + 1}">${opts}</select>` : ''}
       <button data-dl="${m.index}" title="Download this mission as a KMZ file">KMZ</button>
+      <div class="mission-progress">
+        <label class="check small"><input type="checkbox" data-flown="${m.index}" ${m.flown ? 'checked' : ''}> Flown</label>
+        ${m.flown ? '' : m.resumedFrom
+          ? `<button class="link" data-unresume="${m.index}">Fly the whole mission again</button>`
+          : `<button class="link" data-resume="${m.index}" title="The flight was cut short: make a mission of the part that is left">Stopped early? Resume…</button>`}
+      </div>
+      ${resumeOpen === m.index && !m.flown ? resumeForm(m) : ''}
     </div>`;
   }).join('');
+}
+
+function resumeForm(m) {
+  const sel = state.selected - m.fullStart;
+  const guess = sel >= 0 && sel < m.fullCount ? sel + 1 : '';
+  return `<div class="card resume-form">
+    <label>Last waypoint it reached (the number DJI Fly showed, 1–${m.fullCount})
+      <input type="number" id="resumeAt" min="2" max="${m.fullCount}" step="1" value="${guess}" placeholder="or tap the waypoint on the map"></label>
+    <p class="small muted">The new mission starts at that waypoint, so its photo is taken again for overlap. Take off from the same spot (the H): heights are measured from there.</p>
+    <div class="row"><button class="primary" id="btnResumeGo">Make a mission of the rest</button><button id="btnResumeCancel">Cancel</button></div>
+  </div>`;
+}
+
+function progressHtml(missions) {
+  const flown = missions.filter(m => m.flown).length;
+  if (!flown && !missions.some(m => m.resumedFrom)) return '';
+  const left = missions.filter(m => !m.flown);
+  return `<p class="small progress-line"><b>${flown} of ${missions.length} mission${missions.length > 1 ? 's' : ''} flown.</b> ` +
+    (left.length ? `Next: mission ${left[0].index + 1}${left[0].resumedFrom ? ` (the rest, from waypoint ${left[0].resumedFrom + 1})` : ''}.`
+      : 'All done. Check the photos in step 7 before you leave the site.') + '</p>';
 }
 
 function timerNotice() {
@@ -90,13 +120,13 @@ function helperBlock(missions) {
         'In DJI Fly, make a throwaway waypoint mission (two points) and save it. Make one for each mission below.',
         'Connect the controller (or phone) to your computer with USB. On a phone choose <i>File transfer</i>.',
         'Copy each KMZ to <code>Android/data/dji.go.v5/files/waypoint/&lt;ID&gt;/</code> and rename it to <code>&lt;ID&gt;.kmz</code>, replacing the placeholder.',
-        'Reopen DJI Fly and check each mission before flying.'])}</div>${missionRows(missions, false)}`;
+        'Reopen DJI Fly and check each mission before flying.'])}</div>${progressHtml(missions)}${missionRows(missions, false)}`;
   }
   const hasCtl = state.controllers.length > 0;
   return `<div class="card"><p class="small"><b>Helper running.</b> In DJI Fly, save ${missions.length} placeholder waypoint mission${missions.length > 1 ? 's' : ''} (two points each), close DJI Fly, connect the controller${settings().controller === 'rcn-android' ? ' (the phone, in <i>File transfer</i> mode)' : ''} to this computer by USB, then scan.</p>
     <div class="row"><button id="btnScan" class="${hasCtl ? '' : 'primary'}">Scan for controller</button></div>
     <div id="controllerList">${controllersHtml()}</div></div>
-    ${missionRows(missions, true)}
+    ${progressHtml(missions)}${missionRows(missions, true)}
     ${h.experimentalCreate ? `<label class="check" title="Untested: asks the helper to make new mission folders on the controller. DJI Fly may not show them."><input id="expCreate" type="checkbox" ${experimental ? 'checked' : ''}> Experimental: create new mission slots (no placeholder needed). Untested, may not work.</label>` : ''}
     <div class="row"><button id="btnInstall" class="primary" ${canInstall(missions) ? '' : 'disabled'}>Install to controller</button>
       <span class="small muted">${canInstall(missions) ? 'The original files are backed up first.' : hasCtl ? 'Pick a placeholder for at least one mission.' : 'Scan for your controller first.'}</span></div>
@@ -130,7 +160,7 @@ function deployHtml(missions) {
   if (HELPER_CONTROLLERS.includes(c)) return head + helperBlock(missions);
   if (c === 'rc') {
     return head + `<div class="card"><p class="small">The standard DJI RC can't be reached over USB from a computer, so GridFly packs the files for a <b>microSD card</b>.</p>
-      <div class="row"><button id="btnSd" class="primary">Download microSD package</button></div>${readmeSteps(missions)}</div>${missionRows(missions, false)}`;
+      <div class="row"><button id="btnSd" class="primary">Download microSD package</button></div>${readmeSteps(missions)}</div>${progressHtml(missions)}${missionRows(missions, false)}`;
   }
   return head + `<div class="card"><p class="small">With an iPhone, copy the files over with the <b>Files</b> app. The exact folder names can differ between DJI Fly versions; if you don't see these, look inside the DJI Fly folder for the one holding your saved waypoint missions.</p>
     <div class="row"><button id="btnKmzAll" class="primary">Download KMZ${missions.length > 1 ? ' files' : ''}</button></div>
@@ -139,7 +169,7 @@ function deployHtml(missions) {
       'Download the KMZ file(s) on the iPhone (they land in Files, Downloads), or send them over with AirDrop.',
       'Open the <b>Files</b> app, then <b>On My iPhone</b>, then <b>DJI Fly</b>, and open its <i>wayline</i> / <i>waypoint</i> folder. Open the folder of your throwaway mission.',
       'Replace the KMZ inside with yours and give it exactly the old file name.',
-      'Fully close DJI Fly (swipe it away) and reopen it. Open the mission and check it before flying.'])}</div>${missionRows(missions, false)}`;
+      'Fully close DJI Fly (swipe it away) and reopen it. Open the mission and check it before flying.'])}</div>${progressHtml(missions)}${missionRows(missions, false)}`;
 }
 
 function render() {
@@ -157,13 +187,30 @@ function render() {
 
 function wire(missions) {
   const body = $('deployBody');
+  const on1 = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
   const files = () => buildMissionFiles(state.source);
   body.querySelectorAll('[data-dl]').forEach(b => b.onclick = async () => {
     const f = (await files())[+b.dataset.dl];
     download(f.blob, f.name);
   });
+  body.querySelectorAll('[data-flown]').forEach(c => c.onchange = () => {
+    const k = +c.dataset.flown;
+    if (resumeOpen === k) resumeOpen = null;
+    setFlown(k, c.checked);
+    if (c.checked) delete state.targets[k];
+  });
+  body.querySelectorAll('[data-resume]').forEach(b => b.onclick = () => { resumeOpen = +b.dataset.resume; render(); $('resumeAt')?.focus(); });
+  body.querySelectorAll('[data-unresume]').forEach(b => b.onclick = () => setResume(+b.dataset.unresume, 0));
+  on1('btnResumeCancel', () => { resumeOpen = null; render(); });
+  on1('btnResumeGo', () => {
+    const m = missions[resumeOpen];
+    const n = Math.round(+$('resumeAt').value);
+    if (!m || !(n >= 2 && n <= m.fullCount)) return toast(`Enter a waypoint number from 2 to ${m?.fullCount}. (At 1 nothing was flown yet: fly the whole mission again.)`, 6000);
+    resumeOpen = null;
+    setResume(m.index, n - 1);
+    toast(`Mission ${m.index + 1} now starts at waypoint ${n}. Install or download it again before flying.`, 6000);
+  });
   body.querySelectorAll('[data-target]').forEach(sel => sel.onchange = () => { state.targets[sel.dataset.target] = sel.value; render(); });
-  const on1 = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
   on1('btnScan', scan);
   on1('btnInstall', install);
   on1('btnBackups', loadBackups);
@@ -189,7 +236,7 @@ async function scan() {
     state.scanned = true;
     state.targets = {};
     const slots = slotsOf().sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
-    computeMissions().forEach((m, i) => { if (slots[i]) state.targets[i] = slots[i].key; });
+    computeMissions().filter(m => !m.flown).forEach((m, i) => { if (slots[i]) state.targets[m.index] = slots[i].key; });
     render();
   } catch (e) {
     $('controllerList').innerHTML = `<p class="small">Scan failed: ${esc(e.message)}</p>`;
@@ -294,6 +341,12 @@ export async function initInstall() {
   $('btnPrintCl').onclick = printChecklist;
   $('btnCopyCl').onclick = copyChecklist;
   on('render', () => { if (!busy) renderSoon(); });
+  // Tapping a waypoint on the map fills in the "where did it stop?" form.
+  on('selection', () => {
+    const m = resumeOpen !== null && computeMissions()[resumeOpen];
+    const i = state.selected - (m ? m.fullStart : 0);
+    if (m && $('resumeAt') && i >= 0 && i < m.fullCount) $('resumeAt').value = i + 1;
+  });
   on('site', renderSoon);
   render();
 }

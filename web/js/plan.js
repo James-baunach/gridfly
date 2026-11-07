@@ -167,13 +167,63 @@ export function computeMissions() {
     const even = splitRanges(wps, s, Math.min(s.maxWp, Math.ceil(wps.length / k) + 1), evenSec);
     if (even.length === k) out = even;
   }
+  const prog = progress();
   return out.map((m, k) => {
-    const pts = wps.slice(m.start, m.end + 1);
+    // A mission cut short in the field restarts at the waypoint where it stopped.
+    const from = prog?.resume?.mission === k && prog.resume.from > 0 && prog.resume.from <= m.end - m.start ? prog.resume.from : 0;
+    const start = m.start + from;
+    const pts = wps.slice(start, m.end + 1);
     let time = 0;
     for (let i = 1; i < pts.length; i++) time += segmentTime(pts[i - 1], pts[i], s);
-    return { ...m, index: k, points: pts, distance: pathLength(pts), time: time + missionOverhead(pts), color: MISSION_COLORS[k % MISSION_COLORS.length] };
+    return {
+      start, end: m.end, fullStart: m.start, fullCount: m.end - m.start + 1, resumedFrom: from, flown: !!prog?.flown.includes(k),
+      index: k, points: pts, distance: pathLength(pts), time: time + missionOverhead(pts), color: MISSION_COLORS[k % MISSION_COLORS.length],
+    };
   });
 }
+
+// ---------- Field progress ----------
+// Which missions have been flown, and where an interrupted one should restart. Tied to the waypoint
+// positions, so it is set aside automatically when the plan changes.
+
+export function planSignature(wps = state.waypoints) {
+  let h = 2166136261 >>> 0;
+  const mix = v => { h = Math.imul(h ^ v, 16777619) >>> 0; };
+  mix(wps.length);
+  for (const w of wps) { mix(Math.round(w.lat * 1e6)); mix(Math.round(w.lon * 1e6)); }
+  return h.toString(36);
+}
+
+/** The progress record for the current plan, or null. */
+export function progress() {
+  const p = state.progress;
+  return p && state.waypoints.length && p.sig === planSignature() ? p : null;
+}
+
+function editProgress(fn) {
+  const p = progress() || { sig: planSignature(), flown: [], resume: null };
+  fn(p);
+  state.progress = p;
+  emit('render');
+}
+
+export function setFlown(k, flown) {
+  editProgress(p => {
+    p.flown = p.flown.filter(i => i !== k);
+    if (flown) p.flown.push(k);
+    if (flown && p.resume?.mission === k) p.resume = null;
+  });
+}
+
+/** Restart mission k at its waypoint `from` (0-based within the mission); null clears it. */
+export function setResume(k, from) {
+  editProgress(p => {
+    p.resume = from > 0 ? { mission: k, from } : null;
+    if (from > 0) p.flown = p.flown.filter(i => i !== k);
+  });
+}
+
+export function clearProgress() { state.progress = null; emit('render'); }
 
 export function photoEstimate(missions = computeMissions()) {
   const direct = state.waypoints.filter(w => w.photo).length;
@@ -343,7 +393,9 @@ export async function loadFile(file) {
       return;
     }
     if (!res.waypoints.length) throw new Error('The mission has no waypoints.');
+    emit('projectSwitch'); // the open project stays in My projects; the mission file becomes a new one
     Object.assign(state, {
+      projectId: null, projectName: null, progress: null,
       source: res, sourceBytes: bytes, fileName: res.name, waypoints: res.waypoints, generated: false, plan: null, polygon: [], center: null, line: [],
       home: { lat: res.waypoints[0].lat, lon: res.waypoints[0].lon }, homeUser: false, homeKey: null, homeGround: null, selected: -1, pristine: true,
     });
@@ -364,6 +416,7 @@ export function startOver() {
   Object.assign(state, {
     source: null, sourceBytes: null, fileName: null, generated: false, plan: null, polygon: [], center: null, line: [], waypoints: [],
     home: null, homeUser: false, homeKey: null, homeGround: null, selected: -1, terrainStale: false, pristine: false, undo: [], redo: [],
+    progress: null, projectId: null, projectName: null,
   });
   emit('render');
   emit('plan', { geometry: true });
@@ -390,7 +443,8 @@ export function exportOpts(mission) {
 
 export function missionFileName(m, count) {
   const base = (state.fileName || 'gridfly-mission').replace(/\.kmz$/i, '');
-  return count > 1 ? `${base}-${m.index + 1}of${count}.kmz` : `${base}.kmz`;
+  const rest = m.resumedFrom ? `-rest-from-${m.resumedFrom + 1}` : '';
+  return count > 1 ? `${base}-${m.index + 1}of${count}${rest}.kmz` : `${base}${rest}.kmz`;
 }
 
 export async function buildMissionFiles(source = state.source) {

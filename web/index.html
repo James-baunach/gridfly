@@ -40,9 +40,10 @@
       <details class="menu" id="projMenu">
         <summary>Project</summary>
         <div class="menubody">
+          <button id="btnProjects" title="Every project you have planned on this device">My projects…</button>
+          <button id="btnStartOver" title="Start an empty project. The current one stays in My projects.">New project</button>
           <button id="btnSaveProject" title="Save everything to a .gridfly.json file">Save project file</button>
           <button id="btnOpenProject" title="Open a saved .gridfly.json file">Open project file…</button>
-          <button id="btnStartOver" title="Clear the area and mission">Start over</button>
         </div>
       </details>
       <details class="menu" id="exportMenu">
@@ -67,8 +68,8 @@
   </div>
 
   <div id="restoreNote" class="note" hidden>
-    <span>Restored your last project.</span>
-    <button id="btnRestoreStart" class="link">Start over</button>
+    <span>Opened <span id="restoreName">your last project</span>.</span>
+    <button id="btnRestoreStart" class="link">New project</button>
     <button id="btnRestoreClose" class="link" aria-label="Dismiss">Dismiss</button>
   </div>
 
@@ -346,6 +347,16 @@
     <div id="offList"></div>
     <p id="offStorage" class="small muted"></p>
     <p class="small muted">With no signal you can still draw areas, plan, follow the ground (where heights were saved), check photos and export missions. Place search and fresh weather need a connection. Your current project is always kept on this device.</p>
+  </div>
+</div>
+
+<div id="projects" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-label="My projects">
+    <div class="row between"><h2>My projects</h2><button id="btnProjectsClose" class="link">Close</button></div>
+    <label>This project's name<input id="projCurrent" type="search" autocomplete="off"></label>
+    <div class="row"><button id="btnProjectsNew" class="primary">New project</button></div>
+    <div id="projList"></div>
+    <p class="small muted">Projects are kept on this device and saved as you work, with no signal needed. To move one to another device, use Project, then Save project file.</p>
   </div>
 </div>
 

@@ -11,7 +11,7 @@ import { initWizard, PLAN_IDS, setUi } from './ui-wizard.js';
 import { initInstall } from './ui-install.js';
 import { initSiteCheck } from './ui-sitecheck.js';
 import { initPhotoCheck, runPhotoCheck } from './ui-photocheck.js';
-import { initProject, restoreLast, openProjectFile } from './ui-project.js';
+import { initProject, restoreLast, openProjectFile, newProject, toggleProjects } from './ui-project.js';
 import { initHelp, toggleHelp } from './ui-help.js';
 import { initOffline, toggle as toggleOffline } from './ui-offline.js';
 
@@ -158,13 +158,7 @@ const editSelected = fn => () => { const w = state.waypoints[state.selected]; if
 function bind() {
   $('btnOpen').onclick = $('btnImport').onclick = () => $('fileInput').click();
   $('fileInput').onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; };
-  $('btnNew').onclick = () => {
-    if (state.waypoints.length && !confirm('Start a new mission? (You can undo.)')) return;
-    pushUndo();
-    Object.assign(state, { source: null, sourceBytes: null, fileName: null, generated: false, plan: null, polygon: [], center: null, line: [], waypoints: [], home: null, homeUser: false, homeGround: null, selected: -1, terrainStale: false });
-    emit('render');
-    emit('plan', { geometry: true });
-  };
+  $('btnNew').onclick = () => newProject().then(() => toast('New project started. The previous one is kept in My projects.'));
   $('btnUndo').onclick = undo;
   $('btnRedo').onclick = redo;
 
@@ -228,6 +222,7 @@ function bind() {
     else if (e.key === 'Escape') {
       if (!$('help').hidden) toggleHelp(false);
       else if (!$('offline').hidden) toggleOffline(false);
+      else if (!$('projects').hidden) toggleProjects(false);
       else if (state.mode) setMode(null);
       else select(-1);
     } else if (e.key === '?' && !typing) toggleHelp();

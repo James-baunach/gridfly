@@ -1,8 +1,8 @@
-// Small IndexedDB key-value store for data kept for offline use: ground elevations, site check results
-// and the list of saved areas. Falls back to memory where IndexedDB is missing (tests, private modes).
+// Small IndexedDB key-value store for data kept for offline use: ground elevations, site check results,
+// the list of saved areas, and My projects. Falls back to memory where IndexedDB is missing (tests, private modes).
 
 const DB = 'gridfly';
-const STORES = ['elev', 'site', 'areas'];
+const STORES = ['elev', 'site', 'areas', 'projects'];
 let dbPromise = null;
 const memory = new Map(STORES.map(s => [s, new Map()]));
 
@@ -10,9 +10,10 @@ function open() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
   dbPromise ||= new Promise(resolve => {
     let req;
-    try { req = indexedDB.open(DB, 1); } catch { return resolve(null); }
+    try { req = indexedDB.open(DB, 2); } catch { return resolve(null); }
     req.onupgradeneeded = () => { for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s); };
-    req.onsuccess = () => resolve(req.result);
+    // Let a newer version of the app (in another tab) upgrade the database.
+    req.onsuccess = () => { req.result.onversionchange = () => { req.result.close(); dbPromise = null; }; resolve(req.result); };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });

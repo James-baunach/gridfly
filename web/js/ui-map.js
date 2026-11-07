@@ -179,15 +179,19 @@ export function renderWaypoints() {
     L.polyline([ll(state.home), ll(wps[0])], { color: '#12b76a', weight: 2, dashArray: '6 6', renderer, interactive: false }).addTo(layers.route);
   }
   missions.forEach((m, k) => {
-    L.polyline(m.points.map(ll), { color: m.color, weight: 3, opacity: 0.95, renderer, interactive: false }).addTo(layers.route);
+    // Flown missions and the already-flown part of a resumed one are drawn faint.
+    if (m.resumedFrom) L.polyline(wps.slice(m.fullStart, m.start + 1).map(ll), { color: m.color, weight: 3, opacity: 0.3, dashArray: '2 6', renderer, interactive: false }).addTo(layers.route);
+    L.polyline(m.points.map(ll), { color: m.color, weight: 3, opacity: m.flown ? 0.3 : 0.95, renderer, interactive: false }).addTo(layers.route);
     if (k > 0) L.polyline([ll(wps[m.start - 1]), ll(wps[m.start])], { color: '#ffffff', weight: 1.5, dashArray: '3 6', renderer, interactive: false }).addTo(layers.route);
   });
 
-  const colorOf = i => missions.find(m => i >= m.start && i <= m.end)?.color || '#fff';
+  const missionOf = i => missions.find(m => i >= m.fullStart && i <= m.end);
+  const colorOf = i => missionOf(i)?.color || '#fff';
+  const faint = i => { const m = missionOf(i); return m && (m.flown || i < m.start); };
   wps.forEach((w, i) => {
     L.circleMarker(ll(w), {
       renderer, radius: w.terrainPoint ? 3 : 4.5, weight: 1.5,
-      color: w.terrainPoint ? '#ff4d6d' : '#111', fillColor: w.photo ? colorOf(i) : '#555', fillOpacity: 1,
+      color: w.terrainPoint ? '#ff4d6d' : '#111', fillColor: w.photo ? colorOf(i) : '#555', fillOpacity: faint(i) ? 0.3 : 1, opacity: faint(i) ? 0.4 : 1,
     }).on('click', e => { L.DomEvent.stopPropagation(e); select(i); }).addTo(layers.wp);
   });
 
