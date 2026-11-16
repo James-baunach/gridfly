@@ -3,9 +3,10 @@
 
 import { analyzePhotos } from './photocheck.js';
 import { planGrid } from './patterns.js';
-import { convexHull, polygonAreaM2, haversine, centroid } from './geo.js';
+import { convexHull, haversine, centroid } from './geo.js';
+import { netAreaM2 } from './avoid.js';
 import { coverageCellSize } from './presets.js';
-import { $, state, emit, toast, esc } from './state.js';
+import { $, state, areaList, keepoutList, emit, toast, esc } from './state.js';
 import { settings, pushUndo, currentAngle, applyHeights } from './plan.js';
 import { layers, map, fitTo } from './ui-map.js';
 
@@ -15,7 +16,7 @@ const COLORS = [[0, '#e5484d'], [1, '#f5a524'], [2, '#f2d94e'], [3, '#a3d96c'], 
 const colorFor = n => COLORS.reduce((c, [min, col]) => n >= min ? col : c, COLORS[0][1]);
 
 function surveyPolygon() {
-  if (state.polygon.length >= 3) return state.polygon;
+  if (areaList().length) return areaList()[0];
   if (state.waypoints.length >= 3) return convexHull(state.waypoints);
   return null;
 }
@@ -32,8 +33,9 @@ export async function runPhotoCheck(fileList) {
   $('photoResult').innerHTML = `<p class="muted small">Reading ${files.length} photos… keep this tab open.</p>`;
   layers.coverage.clearLayers();
   try {
-    const cellM = coverageCellSize(polygonAreaM2(polygon));
-    last = { cellM, polygon, res: await analyzePhotos(files, { polygon, cam: settings().cam, home: state.home, cellM, onProgress: n => { bar.value = n; } }) };
+    const extra = areaList().length ? areaList().slice(1) : [], keepouts = keepoutList();
+    const cellM = coverageCellSize(netAreaM2([polygon, ...extra], keepouts));
+    last = { cellM, polygon, res: await analyzePhotos(files, { polygon, areas: extra, keepouts, cam: settings().cam, home: state.home, cellM, onProgress: n => { bar.value = n; } }) };
     drawCoverage();
     fitTo(polygon);
   } catch (e) {
@@ -85,7 +87,7 @@ async function reflyGaps(append) {
   while (todo.length) {
     todo.sort((a, b) => haversine(centroid(a), from) - haversine(centroid(b), from));
     const gap = todo.shift();
-    const r = planGrid(gap, { cam: s.cam, alt: s.alt, front: s.front, side: s.side, angle: currentAngle(), overshoot: s.overshoot, home: from, speed: state.plan?.speed ?? s.speed, gimbal: s.gimbal, captureMode: timer ? 'timer' : 'waypoint' });
+    const r = planGrid(gap, { cam: s.cam, alt: s.alt, front: s.front, side: s.side, angle: currentAngle(), overshoot: s.overshoot, home: from, speed: state.plan?.speed ?? s.speed, gimbal: s.gimbal, captureMode: timer ? 'timer' : 'waypoint', keepouts: keepoutList() });
     wps = wps.concat(r.waypoints);
     if (wps.length) from = wps.at(-1);
   }

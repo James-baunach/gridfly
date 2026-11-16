@@ -129,11 +129,15 @@ export function airspaceWarnings(cells, maxAglM) {
 
 const RANK = { good: 2, ok: 1, bad: 0 };
 
-// Best windows and an overall verdict for today and tomorrow (local calendar days).
-export function weatherDays(hours, now = new Date()) {
+// Best windows and an overall verdict for today, tomorrow and the days after (`count` local calendar days).
+export function weatherDays(hours, now = new Date(), count = 2) {
   const day = d => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
-  const t0 = day(now), t1 = day(new Date(now.getTime() + 86400000));
-  return [[t0, 'Today'], [t1, 'Tomorrow']].map(([key, label]) => {
+  const names = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 12);
+    names.push([day(d), i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })]);
+  }
+  return names.map(([key, label]) => {
     const hs = hours.filter(h => day(h.time) === key);
     const windows = findWindows(hs).filter(w => w.end - w.start >= 3600000);
     const verdict = hs.reduce((v, h) => RANK[h.verdict] > RANK[v] ? h.verdict : v, 'bad');

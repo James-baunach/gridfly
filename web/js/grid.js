@@ -1,6 +1,7 @@
 // Survey grid generation: camera footprint math, lawnmower flight lines, path straightening.
 
 import { makeProjection, rotate, centroid, haversine } from './geo.js';
+import { makeRouter, subtractIntervals } from './avoid.js';
 
 // Sensor sizes in mm, focal length in mm (real, not 35mm-equivalent), image width in px.
 export const CAMERAS = {
@@ -41,7 +42,7 @@ export function autoAngle(polygon) {
   return best;
 }
 
-function crossings(xy, x) {
+export function crossings(xy, x) {
   const ys = [];
   for (let i = 0; i < xy.length; i++) {
     const [x1, y1] = xy[i], [x2, y2] = xy[(i + 1) % xy.length];
@@ -57,10 +58,12 @@ function crossings(xy, x) {
  * Lawnmower pattern over a polygon.
  * @param polygon [{lat, lon}]
  * @param opts {angle: flight bearing in degrees (0 = north-south lines, 90 = east-west),
- *              lineSpacing, photoSpacing, overshoot (m past the boundary), home: {lat, lon} | null}
- * @returns [{lat, lon, line, seg}] in flight order; `seg` numbers each straight run (a line crossing a concave area has several)
+ *              lineSpacing, photoSpacing, overshoot (m past the boundary), home: {lat, lon} | null,
+ *              keepouts: polygons (already enlarged by any clearance) the lines are cut at and the path goes around}
+ * @returns [{lat, lon, line, seg, transit?}] in flight order; `seg` numbers each straight run (a line crossing a concave
+ *          area has several). `transit` points only steer the drone round a keep-out and take no photo.
  */
-export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, overshoot = 0, home = null }) {
+export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, overshoot = 0, home = null, keepouts = [] }) {
   const { proj, xy } = rotatedPolygon(polygon, angle);
   const xs = xy.map(p => p[0]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -68,12 +71,15 @@ export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, oversh
   const nLines = Math.max(1, Math.ceil(width / lineSpacing) + 1);
   const step = nLines > 1 ? width / (nLines - 1) : 0;
   const eps = Math.min(0.05, width / 1000);
+  const kxy = keepouts.filter(k => k.length >= 3).map(k => k.map(p => rotate(proj.toXY(p.lat, p.lon), angle)));
+  const route = kxy.length ? makeRouter(kxy) : null;
 
   // One entry per flight line; concave areas can give a line several intervals.
   const lines = [];
   for (let k = 0; k < nLines; k++) {
     const x = nLines > 1 ? Math.min(maxX - eps, Math.max(minX + eps, minX + k * step)) : (minX + maxX) / 2;
-    const iv = crossings(xy, x).map(([y1, y2]) => [y1 - overshoot, y2 + overshoot]);
+    let iv = crossings(xy, x).map(([y1, y2]) => [y1 - overshoot, y2 + overshoot]);
+    if (kxy.length) iv = subtractIntervals(iv, kxy.flatMap(k => crossings(k, x))).filter(([y1, y2]) => y2 - y1 >= 1);
     if (iv.length) lines.push({ x, iv });
   }
   if (!lines.length) return [];
@@ -90,6 +96,8 @@ export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, oversh
       for (const [y1, y2] of intervals) {
         const len = y2 - y1;
         const n = Math.max(1, Math.ceil(len / photoSpacing));
+        const first = down ? y2 : y1, prev = pts.at(-1);
+        if (route && prev) for (const [tx, ty] of route(prev.xy, [ln.x, first])) pts.push({ xy: [tx, ty], line: i, seg: -1, transit: true });
         for (let j = 0; j <= n; j++) {
           const t = down ? 1 - j / n : j / n;
           pts.push({ xy: [ln.x, y1 + t * len], line: i, seg });
@@ -108,7 +116,7 @@ export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, oversh
   }
   return chosen.map(p => {
     const [x, y] = rotate(p.xy, -angle);
-    return { ...proj.toLL(x, y), line: p.line, seg: p.seg };
+    return { ...proj.toLL(x, y), line: p.line, seg: p.seg, ...(p.transit ? { transit: true } : {}) };
   });
 }
 
@@ -128,7 +136,7 @@ export function snapStraight(waypoints, maxTurn = 15, maxDeviation = 15) {
   };
   let moved = 0, s = 0;
   for (let i = 1; i < n; i++) {
-    const interior = i < n - 1 && turn(i) < maxTurn;
+    const interior = i < n - 1 && !waypoints[i].transit && turn(i) < maxTurn; // transit points steer round keep-outs: never smooth them
     if (interior) continue;
     if (i - s >= 2) {
       const [ax, ay] = xy[s], dx = xy[i][0] - ax, dy = xy[i][1] - ay;

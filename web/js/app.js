@@ -1,12 +1,16 @@
 // GridFly entry point: wires the panel, the map and the feature modules together, and renders the Advanced-mode details.
 
-import { haversine, polygonAreaM2, pathLength } from './geo.js';
+import { haversine, pathLength } from './geo.js';
+import { pathHitsKeepouts, pointInKeepouts } from './avoid.js';
 import { CAMERAS, gridMetrics } from './grid.js';
 import { buildKmz, readFile, TURN_MODES, DRONES } from './wpml.js';
 import { autoMargin, CONTROLLERS, HELPER_CONTROLLERS } from './presets.js';
-import { $, state, on, emit, toast, esc, pref, getLen, setLen, setUnit, fmtLen, fmtDist, fmtTime } from './state.js';
+import { $, state, keepoutList, on, emit, toast, esc, pref, getLen, setLen, getSpeed, setSpeed, setUnit, fmtLen, fmtDist, fmtTime, fmtSpeed } from './state.js';
+import { fmtSmall } from './units.js';
+import { neededShutter, movingPhotos, speedForShutter } from './blur.js';
 import * as plan from './plan.js';
-import { map, layers, renderArea, renderWaypoints, select, setMode, startTool, initMapEvents, searchPlace, locateMe, hullOfWaypoints } from './ui-map.js';
+import { clearanceMessage } from './dsm-ky.js';
+import { map, layers, renderArea, renderWaypoints, select, setMode, startTool, initMapEvents, initShapePick, searchPlace, locateMe, hullOfWaypoints } from './ui-map.js';
 import { initWizard, PLAN_IDS, setUi } from './ui-wizard.js';
 import { initInstall } from './ui-install.js';
 import { initSiteCheck } from './ui-sitecheck.js';
@@ -23,7 +27,7 @@ function renderInfo() {
   const s = settings();
   const g = gridMetrics(s.cam, s.alt, s.front, s.side);
   const interval = g.photoSpacing / s.speed;
-  $('camInfo').innerHTML = `Detail <b>${g.gsd.toFixed(2)} cm/px</b> · photo footprint <b>${fmtLen(g.across)} × ${fmtLen(g.along)}</b><br>` +
+  $('camInfo').innerHTML = `Detail <b>${fmtSmall(g.gsd, state.unit)} per pixel</b> · photo footprint <b>${fmtLen(g.across)} × ${fmtLen(g.along)}</b><br>` +
     `line spacing <b>${fmtLen(g.lineSpacing, 1)}</b> · photo every <b>${fmtLen(g.photoSpacing, 1)}</b> (${interval.toFixed(1)} s)`;
   $('customCam').hidden = $('camera').value !== 'custom';
   $('margin').disabled = s.marginAuto;
@@ -48,6 +52,21 @@ function renderInfo() {
   renderProfile();
 }
 
+// Warnings about keep-out zones: the plan routes round them, but the takeoff and return legs are not planned.
+function keepoutWarnings(wps, missions) {
+  const ko = keepoutList();
+  if (!ko.length) return [];
+  const out = [];
+  if (pathHitsKeepouts(wps, ko)) out.push('Part of the flight path crosses a keep-out zone (waypoints were edited or moved after planning). Re-plan, or move those waypoints.');
+  if (state.home) {
+    if (pointInKeepouts(state.home, ko)) out.push('Your takeoff point (H) is inside a keep-out zone. Move the H marker.');
+    if (missions.some(m => m.points.length && (pathHitsKeepouts([state.home, m.points[0]], ko) || pathHitsKeepouts([m.points.at(-1), state.home], ko)))) {
+      out.push('The straight line between the takeoff point and the first (or last) waypoint of a mission crosses a keep-out zone. GridFly does not plan the takeoff and return legs (Return to Home flies straight back), so fly them yourself or move the H marker.');
+    }
+  }
+  return out;
+}
+
 function renderStats() {
   const s = settings();
   const wps = state.waypoints;
@@ -66,14 +85,23 @@ function renderStats() {
 
   const warn = [];
   if (wps.length) {
+    warn.push(...keepoutWarnings(wps, missions));
     const r = plan.enforceTurnMode();
     if (Math.max(...heights) > 120) warn.push(`Some waypoints are more than ${fmtLen(120)} above the takeoff point. Check local altitude limits and your max altitude setting in DJI Fly.`);
     if (Math.min(...heights) < 5) warn.push(`Some waypoints are less than ${fmtLen(5)} above the takeoff point. Check obstacles and the takeoff location.`);
+    const cl = s.terrain && !state.terrainStale && state.clearance?.count === wps.length ? clearanceMessage(state.clearance.analysis, fmtLen) : null;
+    if (cl) warn.push(cl);
     if (state.terrainStale && s.terrain) warn.push('Points or the takeoff point moved since the ground heights were worked out. Click "Apply heights" again.');
     if (s.terrain && state.plan?.goal !== 'orbit' && wps.every(w => w.ground === undefined)) warn.push('Following the ground is on but no heights have been worked out yet.');
     const g = gridMetrics(s.cam, s.alt, s.front, s.side);
     if ((s.turnMode === 'straight-pass' || s.turnMode === 'curved') && g.photoSpacing / s.speed < 2 && state.plan?.captureMode !== 'timer') {
-      warn.push(`Photos would be ${(g.photoSpacing / s.speed).toFixed(1)} s apart while flying through points. Slow down to ${(g.photoSpacing / 2).toFixed(1)} m/s or use "stop at each point".`);
+      warn.push(`Photos would be ${(g.photoSpacing / s.speed).toFixed(1)} s apart while flying through points. Slow down to ${fmtSpeed(g.photoSpacing / 2)} or use "stop at each point".`);
+    }
+    const moving = movingPhotos({ turnMode: s.turnMode, captureMode: state.plan?.captureMode });
+    const gsdNow = state.plan?.gsd ?? g.gsd, spd = state.plan?.speed ?? s.speed;
+    const sh = neededShutter({ speed: spd, gsdCm: gsdNow, moving });
+    if (sh?.tooFast) {
+      warn.push(`Photos are taken while the drone moves at ${fmtSpeed(spd)}, so they would blur unless the shutter is 1/${sh.denominator} s or faster. Many cameras cannot do that in dim light. Slow down to ${fmtSpeed(speedForShutter(gsdNow))} (then 1/1000 s is enough) or use "stop at each point".`);
     }
     if (r.warnLoaded) warn.push('This file uses curved paths, and DJI Fly ignores photo actions on curved paths. GridFly switches to straight paths as soon as you edit anything.');
     else if (s.turnMode === 'curved') warn.push('Curved paths cut corners between points and can bend flight lines. Use a straight path style for mapping.');
@@ -96,7 +124,8 @@ function renderProfile() {
   const xs = [0];
   for (let i = 1; i < wps.length; i++) xs.push(xs[i - 1] + haversine(wps[i - 1], wps[i]));
   const gr = wps.map(w => w.ground !== undefined ? w.ground - state.homeGround : null);
-  const all = [...wps.map(w => w.height), ...gr.filter(v => v !== null), 0];
+  const cp = state.clearance?.count === wps.length ? state.clearance.profile : null;
+  const all = [...wps.map(w => w.height), ...gr.filter(v => v !== null), ...(cp ? cp.map(p => p.surface) : []), 0];
   const lo = Math.min(...all) - 5, hi = Math.max(...all) + 5;
   const X = d => pad + (W - pad - 8) * d / (xs.at(-1) || 1);
   const Y = v => H - 18 - (H - 30) * (v - lo) / (hi - lo);
@@ -115,6 +144,11 @@ function renderProfile() {
   gr.forEach((g, i) => { if (g === null) return; started ? ctx.lineTo(X(xs[i]), Y(g)) : ctx.moveTo(X(xs[i]), Y(g)); started = true; });
   ctx.lineTo(X(xs.at(-1)), H - 18); ctx.lineTo(X(0), H - 18); ctx.closePath();
   ctx.fillStyle = 'rgba(128,150,120,.45)'; ctx.fill();
+  if (cp?.length) { // trees and buildings (first-return surface), where known
+    ctx.beginPath();
+    cp.forEach((p, i) => i ? ctx.lineTo(X(p.d), Y(p.surface)) : ctx.moveTo(X(p.d), Y(p.surface)));
+    ctx.strokeStyle = 'rgba(40,160,70,.9)'; ctx.lineWidth = 1; ctx.stroke();
+  }
   ctx.beginPath();
   wps.forEach((w, i) => i ? ctx.lineTo(X(xs[i]), Y(w.height)) : ctx.moveTo(X(xs[i]), Y(w.height)));
   ctx.strokeStyle = '#ffd60a'; ctx.lineWidth = 2; ctx.stroke();
@@ -128,7 +162,7 @@ function renderSelection() {
   if (!w) return;
   $('selTitle').textContent = `Waypoint ${state.selected + 1} of ${state.waypoints.length}`;
   if (document.activeElement !== $('selHeight')) setLen('selHeight', w.height);
-  if (document.activeElement !== $('selSpeed')) $('selSpeed').value = w.speed;
+  if (document.activeElement !== $('selSpeed')) setSpeed('selSpeed', w.speed);
   $('selPhoto').checked = !!w.photo;
   $('selInfo').textContent = `${w.lat.toFixed(7)}, ${w.lon.toFixed(7)}` +
     (w.ground !== undefined && state.homeGround !== null ? ` · ${fmtLen(w.height - (w.ground - state.homeGround))} above ground` : '') +
@@ -166,7 +200,7 @@ function bind() {
   $('btnHull').onclick = hullOfWaypoints;
   $('btnClearArea').onclick = () => {
     pushUndo();
-    state.polygon = []; state.center = null; state.line = [];
+    state.polygon = []; state.areas = []; state.keepouts = []; state.center = null; state.line = [];
     if (state.generated) { state.waypoints = []; state.plan = null; state.generated = false; state.home = state.homeUser ? state.home : null; }
     emit('render');
     emit('plan', { geometry: true });
@@ -182,7 +216,7 @@ function bind() {
     emit('render'); toast('Photo action added to every waypoint.');
   };
   $('btnPhotoNone').onclick = () => { pushUndo(); state.waypoints.forEach(w => { w.photo = false; w.actions = null; }); emit('render'); };
-  $('btnSpeedAll').onclick = () => { pushUndo(); const sp = settings().speed; state.waypoints.forEach(w => { w.speed = sp; }); emit('render'); toast(`Speed set to ${sp} m/s.`); };
+  $('btnSpeedAll').onclick = () => { pushUndo(); const sp = settings().speed; state.waypoints.forEach(w => { w.speed = sp; }); emit('render'); toast(`Speed set to ${fmtSpeed(sp)}.`); };
   $('btnReverse').onclick = () => { pushUndo(); state.waypoints.reverse(); state.waypoints.forEach(w => { w.actions = null; }); state.selected = -1; emit('render'); };
   $('btnHeights').onclick = () => plan.applyHeights(true);
 
@@ -202,7 +236,7 @@ function bind() {
     emit('render');
   };
   $('selHeight').onchange = editSelected(w => { w.height = getLen('selHeight'); });
-  $('selSpeed').onchange = editSelected(w => { w.speed = +$('selSpeed').value; });
+  $('selSpeed').onchange = editSelected(w => { w.speed = getSpeed('selSpeed'); });
   $('selPhoto').onchange = editSelected(w => { w.photo = $('selPhoto').checked; w.actions = null; });
 
   const skip = new Set(['quality', 'angle']);
@@ -274,6 +308,7 @@ setUnit(pref('unit', 'm'));
 plan.loadSettings();
 on('render', renderAll);
 initMapEvents();
+initShapePick();
 bind();
 initWizard();
 initSiteCheck();

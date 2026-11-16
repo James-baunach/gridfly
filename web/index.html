@@ -108,6 +108,19 @@
       <button data-tool="line" title="For roads, rivers and fences">Line</button>
       <button data-tool="center" title="For orbiting one building">Orbit centre</button>
     </div>
+    <div id="multiBox" data-for="grid 3d">
+      <div class="row">
+        <button id="btnAddArea" data-help="Map more than one area in the same project. GridFly plans each one and flies them in order, nearest to your takeoff point first.">Add another area</button>
+        <button id="btnAddKeepout" class="keepout-btn" data-help="Draw a shape the drone must not fly over: a pond, a neighbour's lot, a tower. Flight lines are cut there and the drone flies round it.">Add keep-out zone</button>
+      </div>
+      <div id="shapePick" class="tools" hidden>
+        <span id="shapePickText" class="small muted"></span>
+        <button data-add-shape="draw">Polygon</button>
+        <button data-add-shape="rect">Rectangle</button>
+        <button data-add-shape="circle">Circle</button>
+      </div>
+      <p class="muted small">A keep-out is flat on the map: it is not a height limit. The planned route goes round it, but GridFly does not plan the takeoff and return flights. You fly the takeoff, and Return to Home flies straight back, so keep your takeoff point and the way to the first waypoint clear of it. Tap a corner to remove it, tap a shape's label to remove the whole shape.</p>
+    </div>
     <div class="row">
       <button id="btnImport" title="Use an area from Google Earth, or open a DJI mission">Import KML/KMZ…</button>
       <button id="btnLocate" title="Centre the map on where you are">Use my location</button>
@@ -144,6 +157,11 @@
         <input id="quality" type="range" min="0" max="2" step="1" value="1" aria-label="Quality">
       </label>
       <div class="rangeLabels"><span>Fast</span><span>Balanced</span><span>Detailed</span></div>
+      <div class="grid2" id="targetBox">
+        <label data-help="Optional. Type how fine you want the detail, as the size one photo pixel covers on the ground. GridFly works out the flying height for your camera and sets it. A smaller number means finer detail and a lower flight.">Detail I need (<span class="u-gsd">cm</span> per pixel)<input id="targetGsd" type="number" data-gsd data-min="0.1" data-max="20" min="0.1" max="20" step="0.1" placeholder="optional" inputmode="decimal"></label>
+        <label data-help="Optional. Type how many batteries (missions) you have. GridFly finds the lowest flying height, which gives the finest detail, where your whole area still fits in that many missions.">Batteries I have<input id="targetBatteries" type="number" min="1" max="50" step="1" placeholder="optional" inputmode="numeric"></label>
+      </div>
+      <p id="targetNote" class="muted small" role="status"></p>
     </div>
     <div id="plainResult" class="result"></div>
 
@@ -189,7 +207,7 @@
       </div>
       <div class="grid2">
         <label data-help="How high the drone flies above the ground. Lower = sharper detail but more photos.">Height above ground (<span class="u-len">m</span>)<input id="alt" type="number" data-len data-min="5" data-max="500" value="70"></label>
-        <label data-help="Flight speed in metres per second. Slower is safer for sharp photos.">Speed (m/s)<input id="speed" type="number" min="1" max="15" step="0.5" value="5"></label>
+        <label data-help="How fast the drone flies. Slower is safer for sharp photos.">Speed (<span class="u-speed">m/s</span>)<input id="speed" type="number" data-speed data-min="1" data-max="15" data-step="0.5" min="1" max="15" step="0.5" value="5"></label>
         <label data-help="How much each photo overlaps the next one along the flight line. 75 to 80 is good for most sites.">Front overlap (%)<input id="front" type="number" min="0" max="95" step="1" value="75"></label>
         <label data-help="How much neighbouring flight lines overlap. 65 to 70 is good for most sites.">Side overlap (%)<input id="side" type="number" min="0" max="95" step="1" value="65"></label>
         <label data-help="Fly this far past the edge of the area on each line.">Overshoot (<span class="u-len">m</span>)<input id="overshoot" type="number" data-len data-min="0" data-max="100" value="0"></label>
@@ -246,7 +264,7 @@
       <div class="row between"><b id="selTitle"></b><button id="btnDeselect" class="link">close</button></div>
       <div class="grid2">
         <label>Height above takeoff (<span class="u-len">m</span>)<input id="selHeight" type="number" step="0.5" data-len data-step="0.5"></label>
-        <label>Speed (m/s)<input id="selSpeed" type="number" step="0.5" min="1" max="15"></label>
+        <label>Speed (<span class="u-speed">m/s</span>)<input id="selSpeed" type="number" data-speed data-min="1" data-max="15" data-step="0.5" step="0.5" min="1" max="15"></label>
       </div>
       <label class="check"><input id="selPhoto" type="checkbox"> Take photo here</label>
       <p id="selInfo" class="muted small"></p>
@@ -260,7 +278,7 @@
   <section class="adv-only" id="advTerrain">
     <h2>Terrain details</h2>
     <label class="check"><input id="densify" type="checkbox" checked> Add extra points over ridges between waypoints</label>
-    <label>Ridge tolerance (m)<input id="tol" type="number" min="1" max="50" step="1" value="5"></label>
+    <label data-help="How far a ridge may rise into your flying height between two waypoints before GridFly adds an extra point over it.">Ridge tolerance (<span class="u-len">m</span>)<input id="tol" type="number" data-len data-min="1" data-max="50" min="1" max="50" step="1" value="5"></label>
     <div class="row"><button id="btnHeights" class="primary">Apply heights</button></div>
     <canvas id="profile" width="600" height="170" hidden></canvas>
   </section>

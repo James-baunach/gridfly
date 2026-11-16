@@ -1,23 +1,25 @@
 // Mission model: settings, planning (grid / 3D / orbit / corridor), terrain heights, splitting, undo/redo, KMZ building.
 
-import { haversine, convexHull, pathLength } from './geo.js';
+import { haversine, convexHull, pathLength, polygonAreaM2 } from './geo.js';
 import { CAMERAS, gridMetrics, autoAngle, snapStraight } from './grid.js';
-import { planGrid, planOblique, planOrbit, planCorridor } from './patterns.js';
-import { applyTerrain, SOURCES } from './terrain.js';
+import { pathHitsKeepouts } from './avoid.js';
+import { planGrid, planOblique, planOrbit, planCorridor, transitWaypoints } from './patterns.js';
+import { applyTerrain, routeClearance, SOURCES } from './terrain.js';
 import { readFile, buildKmz, DRONES } from './wpml.js';
 import { makeProjection } from './geo.js';
-import { autoMargin, recommendTimer, nearestEdgePoint, curvedRule, GOALS } from './presets.js';
-import { $, state, emit, toast, pref, setPref, getLen, setLen, fmtLen } from './state.js';
+import { autoMargin, recommendTimer, nearestEdgePoint, pointInPolygon, curvedRule, GOALS } from './presets.js';
+import { $, state, areaList, keepoutList, emit, toast, pref, setPref, getLen, setLen, getSpeed, setSpeed, fmtLen, fmtSpeed } from './state.js';
 
 export const MISSION_COLORS = ['#ffd60a', '#4cc9f0', '#f72585', '#80ed99', '#ff9f1c', '#b5179e', '#90e0ef', '#e9ff70'];
 export const MAX_GENERATED = 6000;
 export const MAX_WP_CAP = 400;
 export const OBLIQUE_PITCH = -45;
 
-const PLAIN_IDS = ['camera', 'camW', 'camH', 'camF', 'camPx', 'speed', 'front', 'side', 'angle', 'turnMode', 'gimbal', 'finish', 'rcLost',
-  'terrain', 'densify', 'tol', 'maxWp', 'maxMin', 'captureMode', 'crosshatch', 'oblique', 'hover', 'marginAuto', 'droneKey', 'controller', 'quality'];
-const LEN_IDS = ['alt', 'overshoot', 'margin', 'orbitRadius', 'bldgHeight', 'corridorWidth'];
-export const SETTING_IDS = [...PLAIN_IDS, ...LEN_IDS];
+const PLAIN_IDS = ['camera', 'camW', 'camH', 'camF', 'camPx', 'front', 'side', 'angle', 'turnMode', 'gimbal', 'finish', 'rcLost',
+  'terrain', 'densify', 'maxWp', 'maxMin', 'captureMode', 'crosshatch', 'oblique', 'hover', 'marginAuto', 'droneKey', 'controller', 'quality'];
+const LEN_IDS = ['alt', 'overshoot', 'margin', 'orbitRadius', 'bldgHeight', 'corridorWidth', 'tol'];
+const SPEED_IDS = ['speed'];
+export const SETTING_IDS = [...PLAIN_IDS, ...LEN_IDS, ...SPEED_IDS];
 
 // ---------- Settings ----------
 
@@ -29,10 +31,10 @@ export function settings() {
     ? { sensorW: val('camW'), sensorH: val('camH'), focal: val('camF'), imageW: val('camPx') }
     : CAMERAS[camKey];
   return {
-    cam, alt: getLen('alt'), speed: val('speed'), front: val('front'), side: val('side'), angle: val('angle'),
+    cam, alt: getLen('alt'), speed: getSpeed('speed'), front: val('front'), side: val('side'), angle: val('angle'),
     overshoot: getLen('overshoot'), margin: getLen('margin'), marginAuto: val('marginAuto'),
     turnMode: val('turnMode'), gimbal: val('gimbal'), finish: val('finish'), rcLost: val('rcLost'),
-    terrain: val('terrain'), densify: val('densify'), tol: val('tol'),
+    terrain: val('terrain'), densify: val('densify'), tol: getLen('tol'),
     maxWp: Math.min(MAX_WP_CAP, Math.max(2, val('maxWp') || 200)), maxMin: val('maxMin'),
     captureMode: val('captureMode'), crosshatch: val('crosshatch'), oblique: val('oblique'), hover: val('hover'),
     droneKey: val('droneKey'), controller: val('controller'),
@@ -44,6 +46,7 @@ export function settingsSnapshot() {
   const o = { dir: state.dir, goal: state.goal };
   for (const id of PLAIN_IDS) o[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
   for (const id of LEN_IDS) o[id] = getLen(id);
+  for (const id of SPEED_IDS) o[id] = getSpeed(id);
   return o;
 }
 
@@ -52,7 +55,10 @@ export function applySettings(o = {}) {
     if (o[id] === undefined || !$(id)) continue;
     if ($(id).type === 'checkbox') $(id).checked = !!o[id]; else $(id).value = o[id];
   }
-  for (const id of LEN_IDS) if (Number.isFinite(o[id])) setLen(id, o[id]);
+  // Older saves kept speed and ridge tolerance as text in metric, so accept numeric strings too.
+  const num = v => v === undefined || v === null || v === '' ? NaN : +v;
+  for (const id of LEN_IDS) if (Number.isFinite(num(o[id]))) setLen(id, num(o[id]));
+  for (const id of SPEED_IDS) if (Number.isFinite(num(o[id]))) setSpeed(id, num(o[id]));
   if (o.dir) state.dir = o.dir;
   if (o.goal && GOALS[o.goal]) state.goal = o.goal;
 }
@@ -63,14 +69,14 @@ export const loadSettings = () => applySettings(pref('settings', {}));
 export function currentAngle() {
   if (state.dir === 'ns') return 0;
   if (state.dir === 'ew') return 90;
-  if (state.dir === 'auto') return state.polygon.length >= 3 ? autoAngle(state.polygon) : 0;
+  if (state.dir === 'auto') return areaList().length ? autoAngle(areaList()[0]) : 0;
   return +$('angle').value;
 }
 
 // ---------- Undo / redo ----------
 
 const snapshot = () => JSON.stringify({
-  polygon: state.polygon, waypoints: state.waypoints, home: state.home, homeGround: state.homeGround, homeUser: state.homeUser,
+  polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, waypoints: state.waypoints, home: state.home, homeGround: state.homeGround, homeUser: state.homeUser,
   generated: state.generated, terrainStale: state.terrainStale, center: state.center, line: state.line, plan: state.plan, goal: state.goal,
 });
 
@@ -153,9 +159,8 @@ function splitRanges(wps, s, maxWp, maxSec) {
   return out;
 }
 
-export function computeMissions() {
-  const s = settings();
-  const wps = state.waypoints;
+// `wps`, `s` and `withProgress` let the planner try out other settings (see missionsForAlt) without touching the open plan.
+export function computeMissions(wps = state.waypoints, s = settings(), withProgress = true) {
   const maxSec = s.maxMin > 0 ? s.maxMin * 60 : 0;
   let out = splitRanges(wps, s, s.maxWp, maxSec);
   // Even out the missions instead of leaving a tiny last one, as long as that needs no extra battery.
@@ -167,7 +172,7 @@ export function computeMissions() {
     const even = splitRanges(wps, s, Math.min(s.maxWp, Math.ceil(wps.length / k) + 1), evenSec);
     if (even.length === k) out = even;
   }
-  const prog = progress();
+  const prog = withProgress ? progress() : null;
   return out.map((m, k) => {
     // A mission cut short in the field restarts at the waypoint where it stopped.
     const from = prog?.resume?.mission === k && prog.resume.from > 0 && prog.resume.from <= m.end - m.start ? prog.resume.from : 0;
@@ -236,7 +241,7 @@ export function photoEstimate(missions = computeMissions()) {
 export function missingInput() {
   if (state.goal === 'orbit') return state.center ? null : 'Click the building you want to orbit on the map.';
   if (state.goal === 'corridor') return state.line.length >= 2 ? null : 'Draw a line along the road, river or fence: click points on the map, then Done.';
-  return state.polygon.length >= 3 ? null : 'Draw the area you want to map: at least 3 corners.';
+  return areaList().length ? null : 'Draw the area you want to map: at least 3 corners.';
 }
 
 export function geometryReady() { return !missingInput(); }
@@ -246,16 +251,27 @@ function defaultHome(s) {
   const target = state.userLoc || state.mapCenter();
   if (state.goal === 'orbit') return makeProjection(state.center.lat, state.center.lon).toLL(0, -(s.orbitRadius + 15));
   if (state.goal === 'corridor') return nearestEdgePoint(state.line, target, false);
-  return nearestEdgePoint(state.polygon, target, true);
+  const edges = areaList().map(a => nearestEdgePoint(a, target, true));
+  return edges.reduce((a, b) => haversine(b, target) < haversine(a, target) ? b : a);
 }
 
 function ensureHome(s) {
   if (state.homeUser && state.home) return;
-  const key = JSON.stringify([state.goal, state.goal === 'orbit' ? state.center : state.goal === 'corridor' ? state.line : state.polygon]);
+  const key = JSON.stringify([state.goal, state.goal === 'orbit' ? state.center : state.goal === 'corridor' ? state.line : [state.polygon, state.areas]]);
   if (state.home && state.homeKey === key) return;
   state.home = defaultHome(s);
   state.homeKey = key;
   state.homeGround = null;
+}
+
+// Distance in metres from a point to an area (0 when inside it).
+function distToArea(p, area) {
+  return pointInPolygon(p, area) ? 0 : haversine(p, nearestEdgePoint(area, p, true));
+}
+
+// `next` preceded by transit waypoints that go round the keep-outs after waypoint `prev`.
+function link(prev, next, keepouts) {
+  return prev && next.length && keepouts.length ? transitWaypoints(prev, next[0], keepouts).concat(next) : next;
 }
 
 function buildPlan(s) {
@@ -281,22 +297,55 @@ function buildPlan(s) {
   const useObl = goal === '3d' && s.oblique;
   const opts = { ...base, angle, overshoot: s.overshoot, margin, crosshatch: goal === '3d' && s.crosshatch };
   const want = useObl ? 'waypoint' : s.captureMode;
-  let res = planGrid(state.polygon, { ...opts, captureMode: want === 'timer' ? 'timer' : 'waypoint' });
+  const keepouts = keepoutList();
+  // Fly the areas one after another: nearest the takeoff point first, then the nearest to where the drone ended.
+  const run = captureMode => {
+    const todo = areaList();
+    let wps = [], last = state.home, gridCount = 0, interval = null, speed = s.speed;
+    while (todo.length) {
+      todo.sort((a, b) => distToArea(last, a) - distToArea(last, b));
+      const area = todo.shift();
+      const g = planGrid(area, { ...opts, keepouts, angle: state.dir === 'auto' ? autoAngle(area) : angle, home: last, captureMode });
+      gridCount += g.waypoints.length; interval = g.interval; speed = g.speed;
+      let part = g.waypoints;
+      if (useObl) {
+        const ob = planOblique(area, { ...base, keepouts, overshoot: s.overshoot, pitch: OBLIQUE_PITCH, margin, home: part.at(-1) || last });
+        part = part.concat(link(part.at(-1), ob.waypoints, keepouts));
+      }
+      wps = wps.concat(link(wps.at(-1), part, keepouts));
+      last = wps.at(-1) || last;
+    }
+    return { waypoints: wps, gridCount, interval, speed };
+  };
+  let res = run(want === 'timer' ? 'timer' : 'waypoint');
   let recommended = false;
-  if (want === 'auto' && recommendTimer(res.waypoints.length)) { res = planGrid(state.polygon, { ...opts, captureMode: 'timer' }); recommended = true; }
-  const tip = want === 'waypoint' && recommendTimer(res.waypoints.length);
-  let waypoints = res.waypoints;
-  if (useObl) {
-    const ob = planOblique(state.polygon, { ...base, overshoot: s.overshoot, pitch: OBLIQUE_PITCH, margin, home: waypoints.at(-1) || state.home });
-    waypoints = waypoints.concat(ob.waypoints);
-  }
+  if (want === 'auto' && recommendTimer(res.gridCount)) { res = run('timer'); recommended = true; }
+  const tip = want === 'waypoint' && recommendTimer(res.gridCount);
+  const waypoints = res.waypoints;
   return { ...meta, margin, waypoints, captureMode: res.interval ? 'timer' : 'waypoint', interval: res.interval, speed: res.speed, recommendedTimer: recommended, tip };
+}
+
+/**
+ * How many missions the plan would need if you flew at `alt` metres, using the real planner and mission
+ * splitting but leaving the open plan alone. Terrain heights are ignored (they only move heights a little).
+ * Infinity when the plan would be too big to generate.
+ */
+export function missionsForAlt(alt) {
+  const s = { ...settings(), alt };
+  ensureHome(s);
+  const g = gridMetrics(s.cam, alt, s.front, s.side);
+  const area = state.goal === 'corridor' ? pathLength(state.line) * s.corridorWidth : areaList().reduce((a, p) => a + polygonAreaM2(p), 0);
+  // A quick count first, so a very low height over a big area does not build millions of points.
+  if (area / (g.lineSpacing * g.photoSpacing) > MAX_GENERATED * 4) return Infinity;
+  const p = buildPlan(s);
+  if (!p.waypoints.length || p.waypoints.length > MAX_GENERATED) return p.waypoints.length ? Infinity : 0;
+  return computeMissions(p.waypoints.map(w => ({ ...w, height: alt })), s, false).length;
 }
 
 let genToken = 0;
 
 export async function generate({ auto = false } = {}) {
-  if (state.goal !== 'orbit' && state.goal !== 'corridor' && state.polygon.length < 3 && state.waypoints.length >= 3) state.polygon = convexHull(state.waypoints);
+  if (state.goal !== 'orbit' && state.goal !== 'corridor' && !areaList().length && state.waypoints.length >= 3) state.polygon = convexHull(state.waypoints);
   const need = missingInput();
   if (need) { if (!auto) toast(need); return false; }
   if (!auto && state.waypoints.length && !state.generated && !confirm('Replace the current waypoints with a new plan?')) return false;
@@ -357,9 +406,17 @@ export async function applyHeights(withUndo = true, token = genToken) {
     status.textContent = `Ground heights: ${SOURCES[r.source].short}. Ground varies ${fmtLen(Math.min(...g))} to ${fmtLen(Math.max(...g))} above sea level; takeoff at ${fmtLen(r.homeGround)}.` +
       (r.inserted ? ` Added ${r.inserted} terrain point${r.inserted > 1 ? 's' : ''} over ridges.` : '') +
       (r.source === 'ky' ? ' LiDAR ground heights are accurate, but trees and buildings are not included: your height above ground must also clear the treetops.'
+        : r.source === 'd3' ? ' USGS 3DEP is bare earth (no trees or buildings) and its detail varies from about 1 m to 10 m; leave a generous margin.'
         : ' This data is coarse and ignores trees and buildings; leave a generous margin.') +
       (r.note ? ' ' + r.note : '');
+    state.clearance = null;
     emit('render');
+    if (r.source === 'ky') {
+      // Tree and building clearance from the Kentucky surface model; quiet when it is unavailable.
+      const wps = state.waypoints;
+      const c = await routeClearance(wps, r.homeGround).catch(() => null);
+      if (c && token === genToken && state.waypoints === wps) { state.clearance = { ...c, count: wps.length }; emit('render'); }
+    }
   } catch (e) {
     status.textContent = 'Ground heights not available: ' + e.message;
   } finally {
@@ -369,8 +426,9 @@ export async function applyHeights(withUndo = true, token = genToken) {
 
 export function straighten() {
   if (state.waypoints.length < 3) return toast('Not enough waypoints to straighten.');
-  pushUndo();
   const r = snapStraight(state.waypoints);
+  if (keepoutList().length && pathHitsKeepouts(r.waypoints, keepoutList()) && !pathHitsKeepouts(state.waypoints, keepoutList())) return toast('Straightening would make the path cross a keep-out zone, so it was not done.', 6000);
+  pushUndo();
   state.waypoints = r.waypoints;
   if (r.moved) state.terrainStale = state.waypoints.some(w => w.ground !== undefined);
   const tm = $('turnMode');
@@ -399,7 +457,7 @@ export async function loadFile(file) {
     emit('projectSwitch'); // the open project stays in My projects; the mission file becomes a new one
     Object.assign(state, {
       projectId: null, projectName: null, progress: null,
-      source: res, sourceBytes: bytes, fileName: res.name, waypoints: res.waypoints, generated: false, plan: null, polygon: [], center: null, line: [],
+      source: res, sourceBytes: bytes, fileName: res.name, waypoints: res.waypoints, generated: false, plan: null, polygon: [], areas: [], keepouts: [], center: null, line: [],
       home: { lat: res.waypoints[0].lat, lon: res.waypoints[0].lon }, homeUser: false, homeKey: null, homeGround: null, selected: -1, pristine: true,
     });
     $('turnMode').value = res.info.turnMode || 'keep';
@@ -417,7 +475,7 @@ export async function loadFile(file) {
 
 export function startOver() {
   Object.assign(state, {
-    source: null, sourceBytes: null, fileName: null, generated: false, plan: null, polygon: [], center: null, line: [], waypoints: [],
+    source: null, sourceBytes: null, fileName: null, generated: false, plan: null, polygon: [], areas: [], keepouts: [], center: null, line: [], waypoints: [],
     home: null, homeUser: false, homeKey: null, homeGround: null, selected: -1, terrainStale: false, pristine: false, undo: [], redo: [],
     progress: null, projectId: null, projectName: null,
   });

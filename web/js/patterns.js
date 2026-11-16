@@ -2,6 +2,7 @@
 
 import { makeProjection, centroid } from './geo.js';
 import { gridMetrics, generateGrid } from './grid.js';
+import { makeRouter } from './avoid.js';
 
 const RAD = Math.PI / 180;
 
@@ -66,14 +67,43 @@ export function bufferPolygon(polygon, meters) {
   return offsetPath(xy, outwardIsRight ? -meters : meters, true).map(([x, y]) => proj.toLL(x, y));
 }
 
+// ---------- Keep-out zones ----------
+
+// Keep-outs are enlarged by this much when planning, so the path never grazes the real outline.
+export const KEEPOUT_CLEARANCE = 3;
+
+export function inflateKeepouts(keepouts) {
+  return (keepouts || []).filter(k => k.length >= 3).map(k => bufferPolygon(k, KEEPOUT_CLEARANCE));
+}
+
+// Points ({lat, lon}) to fly through between a and b so the path goes round the (already enlarged) keep-outs.
+function transitPoints(a, b, kos) {
+  if (!kos.length) return [];
+  const proj = makeProjection(a.lat, a.lon);
+  const route = makeRouter(kos.map(k => k.map(p => proj.toXY(p.lat, p.lon))));
+  return route(proj.toXY(a.lat, a.lon), proj.toXY(b.lat, b.lon)).map(([x, y]) => proj.toLL(x, y));
+}
+
+/**
+ * Transit waypoints (no photo) that carry the drone from waypoint a to waypoint b without crossing a keep-out.
+ * They copy height, speed, gimbal and heading from b. Empty when the straight line is clear.
+ */
+export function transitWaypoints(a, b, keepouts) {
+  return transitPoints(a, b, inflateKeepouts(keepouts)).map(p => ({
+    lat: p.lat, lon: p.lon, height: b.height, speed: b.speed, photo: false, gimbalPitch: b.gimbalPitch, actions: null,
+    ...(b.heading !== undefined ? { heading: b.heading } : {}), transit: true,
+  }));
+}
+
 // ---------- Shared ----------
 
 function makeWp(p, o) {
   const wp = {
-    lat: p.lat, lon: p.lon, height: o.height, speed: o.speed, photo: o.photo ?? true,
+    lat: p.lat, lon: p.lon, height: o.height, speed: o.speed, photo: p.transit ? false : (o.photo ?? true),
     gimbalPitch: o.pitch, actions: null,
   };
   if (o.heading !== undefined) wp.heading = o.heading;
+  if (p.transit) wp.transit = true;
   return wp;
 }
 
@@ -81,7 +111,7 @@ function makeWp(p, o) {
 
 /**
  * Lawnmower survey over a polygon.
- * @param opts {cam, alt, front, side, angle, overshoot, home, speed, gimbal, margin, crosshatch,
+ * @param opts {cam, alt, front, side, angle, overshoot, home, speed, gimbal, margin, crosshatch, keepouts (polygons to fly round),
  *              captureMode: 'waypoint' (photo at every point) | 'timer' (DJI Fly Timed Shot)}
  * @returns {waypoints, metrics, interval (s, timer mode only, else null), speed (m/s used), lines}
  */
@@ -90,16 +120,17 @@ export function planGrid(polygon, opts) {
     cam, alt, front, side, angle = 0, overshoot = 0, home = null, speed = 5, gimbal = -90,
     margin = 0, crosshatch = false, captureMode = 'waypoint',
   } = opts;
+  const kos = inflateKeepouts(opts.keepouts);
   const area = margin ? bufferPolygon(polygon, margin) : polygon;
   const metrics = gridMetrics(cam, alt, front, side);
-  const gen = { lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot };
+  const gen = { lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot, keepouts: kos };
 
   let pts = generateGrid(area, { ...gen, angle, home });
   if (crosshatch && pts.length) {
     const last = pts.at(-1);
     const second = generateGrid(area, { ...gen, angle: angle + 90, home: last })
-      .map(p => ({ ...p, line: p.line + last.line + 1, seg: p.seg + last.seg + 1 }));
-    pts = pts.concat(second);
+      .map(p => ({ ...p, line: p.line + last.line + 1, seg: p.seg < 0 ? p.seg : p.seg + last.seg + 1 }));
+    if (second.length) pts = pts.concat(transitPoints(last, second[0], kos).map(p => ({ ...p, line: last.line + 1, seg: -1, transit: true })), second);
   }
 
   const timer = captureMode === 'timer';
@@ -108,7 +139,7 @@ export function planGrid(polygon, opts) {
     const need = Math.max(2, metrics.photoSpacing / speed);
     interval = TIMER_INTERVALS.find(s => s >= need) ?? TIMER_INTERVALS.at(-1);
     flySpeed = Math.max(1, Math.floor(metrics.photoSpacing / interval * 10) / 10);
-    pts = pts.filter((p, i) => pts[i - 1]?.seg !== p.seg || pts[i + 1]?.seg !== p.seg);
+    pts = pts.filter((p, i) => p.transit || pts[i - 1]?.seg !== p.seg || pts[i + 1]?.seg !== p.seg);
   }
 
   const waypoints = pts.map(p => makeWp(p, { height: alt, speed: flySpeed, photo: !timer, pitch: gimbal }));
@@ -124,6 +155,7 @@ export function planGrid(polygon, opts) {
  */
 export function planOblique(polygon, opts) {
   const { cam, alt, front, side, overshoot = 0, speed = 5, pitch = -45, margin = 0 } = opts;
+  const kos = inflateKeepouts(opts.keepouts);
   const metrics = gridMetrics(cam, alt, front, side);
   const area = bufferPolygon(polygon, margin + alt * Math.tan((90 + pitch) * RAD));
   const waypoints = [];
@@ -131,9 +163,10 @@ export function planOblique(polygon, opts) {
   for (const facing of [0, 90, 180, 270]) {
     // Flying along the facing direction keeps the sensor's wide side across the track, as gridMetrics assumes.
     const pts = generateGrid(area, {
-      angle: facing, lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot, home,
+      angle: facing, lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot, home, keepouts: kos,
     });
-    for (const p of pts) waypoints.push(makeWp(p, { height: alt, speed, pitch, heading: facing }));
+    const link = waypoints.length && pts.length ? transitPoints(waypoints.at(-1), pts[0], kos).map(p => ({ ...p, transit: true })) : [];
+    for (const p of [...link, ...pts]) waypoints.push(makeWp(p, { height: alt, speed, pitch, heading: facing }));
     if (pts.length) home = pts.at(-1);
   }
   return { waypoints };

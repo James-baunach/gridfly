@@ -1,20 +1,21 @@
 /* global L */
 // Step 5: weather, light, airspace and obstacle checks for the planned area.
 
-import { fetchWeather, fetchObstacles, fetchAirspace, judgeHour, FAA_VIEWER } from './sitecheck.js';
+import { fetchWeather, fetchObstacles, fetchAirspace, fetchKp, fetchNationalPark, judgeHour, kpAt, kpSummary, kpWords, kpLevel, laancAdvice, FAA_VIEWER, FAA_TFR_SITE, FAA_LAANC_PAGE } from './sitecheck.js';
 import { goodLightWindow, sunTimes } from './sun.js';
-import { centroid } from './geo.js';
+import { centroid, convexHull } from './geo.js';
 import { weatherDays, nowVerdict, obstacleWarnings, airspaceWarnings, metresToFeet } from './presets.js';
-import { $, state, on, emit, esc, debounce, fmtLen } from './state.js';
+import { $, state, areaList, on, emit, esc, debounce, fmtLen } from './state.js';
 import * as store from './store.js';
 import { settings } from './plan.js';
 import { layers } from './ui-map.js';
 
-const S = { weather: null, wkey: null, obstacles: null, airspace: null, gkey: null, busy: {}, err: {}, savedAt: {} };
+const S = { weather: null, wkey: null, obstacles: null, airspace: null, kp: null, parks: null, gkey: null, busy: {}, err: {}, savedAt: {} };
 const hm = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const LABEL = { good: 'Good', ok: 'OK', bad: 'Not good' };
 
 export function siteArea() {
+  if (areaList().length > 1) return convexHull(areaList().flat()); // several areas: one outline around all of them
   if (state.polygon.length >= 3) return state.polygon;
   if (state.waypoints.length) return state.waypoints;
   if (state.line.length >= 2) return state.line;
@@ -32,7 +33,7 @@ export function flightAgl() {
 const upcoming = hours => {
   const agl = flightAgl();
   return hours.filter(h => new Date(h.time).getTime() >= Date.now() - 3600000)
-    .map(h => ({ ...h, time: new Date(h.time), ...judgeHour(h, agl) }));
+    .map(h => { const x = { ...h, time: new Date(h.time) }; x.kp = kpAt(S.kp, x.time.getTime() + 1800000); return { ...x, ...judgeHour(x, agl, state.unit) }; });
 };
 
 const pill = v => `<span class="pill ${v}">${LABEL[v] || '—'}</span>`;
@@ -72,11 +73,14 @@ function run(force = false) {
     S.wkey = wkey;
     // Saved by location only: the hours are judged again for the current height when shown.
     jobs.push(check('weather', gkey, () => fetchWeather(c.lat, c.lon, agl), () => S.wkey === wkey));
+    // Kp is one worldwide forecast, saved under one key.
+    jobs.push(check('kp', 'world', fetchKp, () => S.wkey === wkey));
   }
   if (force || gkey !== S.gkey) {
     S.gkey = gkey;
     jobs.push(check('obstacles', gkey, () => fetchObstacles(area), () => S.gkey === gkey));
     jobs.push(check('airspace', gkey, () => fetchAirspace(area), () => S.gkey === gkey));
+    jobs.push(check('parks', gkey, () => fetchNationalPark(area), () => S.gkey === gkey));
   }
   render();
   return Promise.all(jobs);
@@ -95,23 +99,60 @@ function weatherCard(c) {
   const hours = upcoming(S.weather.hours);
   if (!hours.length) return `${savedNote('weather')}<p class="small">The saved forecast has run out. Check again when you have signal.</p>`;
   const now = nowVerdict(hours);
-  const days = weatherDays(hours);
-  const rows = days.map(d => `<div class="wxrow"><b>${d.label}</b> ${d.verdict ? pill(d.verdict) : ''}
+  const days = weatherDays(hours, new Date(), 7);
+  const rows = days.slice(0, 2).map(d => `<div class="wxrow"><b>${d.label}</b> ${d.verdict ? pill(d.verdict) : ''}
     <span class="small">${d.windows.length ? d.windows.map(w => `${hm(w.start)}–${hm(w.end)}`).join(', ') : d.verdict ? 'no good window' : 'no data'}</span>
     <div class="strip">${d.hours.map(h => `<i class="${h.verdict}" title="${esc(hm(h.time) + ': ' + (h.reasons.join('; ') || 'looks good'))}"></i>`).join('')}</div></div>`).join('');
+  const later = days.slice(2).filter(d => d.verdict).map(d => `<li><b>${d.label}</b> ${pill(d.verdict)} <span class="small">${d.windows.length ? d.windows.map(w => `${hm(w.start)}–${hm(w.end)}`).join(', ') : 'no good window'}</span></li>`).join('');
+  const rest = later ? `<p class="small"><b>The days after</b> (forecasts get less sure the further ahead they are):</p><ul class="small tight nobullet">${later}</ul>` : '';
   const sun = sunTimes(new Date(), c.lat, c.lon), light = goodLightWindow(new Date(), c.lat, c.lon, 30);
   return `${savedNote('weather')}<div class="row between"><b>Right now</b> ${now ? pill(now.verdict) : ''}</div>
-    ${now?.reasons.length ? `<p class="small muted">${esc(now.reasons.join('; '))}</p>` : ''}${rows}
+    ${now?.reasons.length ? `<p class="small muted">${esc(now.reasons.join('; '))}</p>` : ''}${rows}${rest}
     <p class="small"><b>Light:</b> ${sun.sunrise ? `sunrise ${hm(sun.sunrise)}, sunset ${hm(sun.sunset)}` : 'no sunrise or sunset today'}.
     ${light ? `Best light (sun above 30°): ${hm(light.start)}–${hm(light.end)}.` : 'The sun stays low today, so shadows will be long.'} Times are in your computer's time zone.</p>`;
+}
+
+function kpCard() {
+  if (S.busy.kp && !S.kp) return '<p class="muted small">Checking geomagnetic activity…</p>';
+  if (S.err.kp) return `<p class="small">${esc(S.err.kp)}</p>`;
+  const sum = S.kp && kpSummary(S.kp, new Date(), 24);
+  if (!sum) return S.kp ? `${savedNote('kp')}<p class="small">The saved geomagnetic forecast has run out. Check again when you have signal.</p>` : '<p class="muted small">Waiting for an area.</p>';
+  const num = k => (Math.round(k * 10) / 10);
+  const now = sum.now != null ? `<div class="row between"><b>Right now</b> ${pill(kpLevel(sum.now))}</div><p class="small">Kp ${num(sum.now)}: ${kpWords(sum.now)}.</p>` : '';
+  const next = sum.peak != null ? `<p class="small">Next 24 hours: at most Kp ${num(sum.peak)} (${kpWords(sum.peak)}${sum.peak >= 5 ? ` around ${hm(sum.peakAt)}` : ''}).</p>` : '';
+  return savedNote('kp') + now + next +
+    '<p class="small muted">Why it matters: geomagnetic storms can disturb GPS and the compass on the drone, so it may drift or refuse to hold position. Kp 5 or more is a caution, 7 or more is bad. Times are in the time zone of this device.</p>';
+}
+
+function laancNote(agl) {
+  const a = laancAdvice(S.airspace, agl);
+  if (!a) return '';
+  const ceil = a.lowestFt === 0 ? '0 ft' : `${a.lowestFt} ft`;
+  const where = a.airports.length ? ` near ${esc(a.airports.slice(0, 3).join(', '))}` : '';
+  const why = a.zero
+    ? `The FAA grid ceiling here is ${ceil}${where}: that cell cannot be approved automatically, so you must ask the FAA for authorisation through FAA DroneZone and wait for an answer.`
+    : a.overCeiling
+      ? `The lowest FAA grid ceiling here is ${ceil}${where}, under your flight height of ${Math.round(a.aglFt)} ft. Lower the flight height to the ceiling, or get authorisation for the full height.`
+      : `This is controlled airspace${where}. The lowest FAA grid ceiling is ${ceil}, and your flight height of ${Math.round(a.aglFt)} ft is under it.`;
+  return `<p class="bad-note"><b>You need FAA authorisation (LAANC) to fly here.</b> ${why}</p>
+    <p class="small">How: open an FAA-approved LAANC app (the list is on <a href="${FAA_LAANC_PAGE}" target="_blank" rel="noopener">the FAA's LAANC page</a>), pick the date, time, place and height, and you usually get an answer within seconds. Do it before you fly, and do not exceed the approved height.</p>`;
+}
+
+function parkNote() {
+  if (S.err.parks || !S.parks?.length) return '';
+  return `<p class="bad-note"><b>This area is inside a US National Park Service area (${esc(S.parks.slice(0, 3).join(', '))}).</b> Launching, landing or flying a drone there is prohibited without a permit from the park.</p>`;
+}
+
+function tfrNote() {
+  return `<p class="small"><b>Temporary flight restrictions (TFRs)</b> for events, fires, VIP visits and similar can appear at short notice. The FAA does not offer them in a form this app can read, so check <a href="${FAA_TFR_SITE}" target="_blank" rel="noopener">the FAA TFR list</a> on the day (US only).</p>`;
 }
 
 function airspaceCard(agl) {
   const link = `<a href="${FAA_VIEWER}" target="_blank" rel="noopener">Open the FAA UAS Facility Map</a>`;
   if (S.busy.airspace && !S.airspace) return '<p class="muted small">Checking airspace…</p>';
-  if (S.err.airspace) return `<p class="small">${esc(S.err.airspace)}</p><p class="small">${link} to check by hand.</p>`;
+  if (S.err.airspace) return `${parkNote()}<p class="small">${esc(S.err.airspace)}</p><p class="small">${link} to check by hand.</p>${tfrNote()}`;
   if (!S.airspace) return '<p class="muted small">Waiting for an area.</p>';
-  return savedNote('airspace') + airspaceBody(agl, link);
+  return savedNote('airspace') + parkNote() + laancNote(agl) + airspaceBody(agl, link) + tfrNote();
 }
 
 function airspaceBody(agl, link) {
@@ -160,7 +201,7 @@ function render() {
   const agl = flightAgl();
   const low = airspaceWarnings(S.airspace, agl);
   const obs = obstacleWarnings(S.obstacles || [], area, agl);
-  state.site = { airspaceBlock: low, obstacleWarn: obs, now: S.weather ? nowVerdict(upcoming(S.weather.hours)) : null };
+  state.site = { airspaceBlock: low, obstacleWarn: obs, laanc: !!laancAdvice(S.airspace, agl), nationalPark: !!(S.parks && S.parks.length), now: S.weather ? nowVerdict(upcoming(S.weather.hours)) : null };
   drawLayers(agl);
   if (!area) {
     box.innerHTML = '<p class="muted">Draw your area first. These checks run by themselves once there is one.</p>';
@@ -168,9 +209,10 @@ function render() {
     const c = centroid(area);
     box.innerHTML = `
       <div class="card"><h3>Weather</h3>${weatherCard(c)}</div>
+      <div class="card"><h3>Geomagnetic activity</h3>${kpCard()}</div>
       <div class="card"><h3>Airspace</h3>${airspaceCard(agl)}</div>
       <div class="card"><h3>Obstacles</h3>${obstacleCard(agl)}</div>
-      <p class="muted small">These checks send the approximate location of your area to Open-Meteo (weather), the FAA and OpenStreetMap (Overpass). They help, but they are not a substitute for looking at the site and knowing your local rules.</p>`;
+      <p class="muted small">These checks send the approximate location of your area to Open-Meteo (weather), the FAA and OpenStreetMap (Overpass). The geomagnetic forecast (NOAA) is the same for everyone and sends no location. They help, but they are not a substitute for looking at the site and knowing your local rules.</p>`;
   }
   emit('site');
 }
@@ -180,6 +222,8 @@ export function initSiteCheck() {
   on('plan', later);
   $('btnSiteRefresh').onclick = () => run(true);
   $('alt').addEventListener('change', later);
+  let shownUnit = state.unit;
+  on('render', () => { if (state.unit !== shownUnit) { shownUnit = state.unit; render(); } }); // wind speeds follow the m / ft switch
   render();
 }
 

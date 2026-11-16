@@ -1,15 +1,19 @@
 // Ground elevation lookup and terrain-following heights.
-// Two sources: Kentucky LiDAR (2 ft, see lidar-ky.js) where it covers the whole mission, otherwise
-// Open-Meteo (Copernicus GLO-90, worldwide). One mission never mixes the two: heights are relative to the
-// takeoff point, so a difference between the sources would show up as a height error.
+// Three sources, tried in this order: Kentucky LiDAR (2 ft, lidar-ky.js) where it covers the whole mission and
+// the takeoff point, then USGS 3DEP (dem-3dep.js, where covers3dep() allows it), then Open-Meteo (Copernicus
+// GLO-90, worldwide). One mission never mixes sources: heights are relative to the takeoff point, so a
+// difference between the sources would show up as a height error.
 
 import { haversine } from './geo.js';
 import { latticeNodes } from './offline.js';
 import * as ky from './lidar-ky.js';
+import * as d3 from './dem-3dep.js';
+import * as dsm from './dsm-ky.js';
 import * as store from './store.js';
 
 export const SOURCES = {
   ky: { name: ky.KY_NAME, short: 'Kentucky LiDAR (2 ft)', step: 10 },
+  d3: { name: d3.D3_NAME, short: 'USGS 3DEP (about 5 m)', step: 15 },
   global: { name: 'Copernicus DEM via Open-Meteo (about 90 m)', short: 'worldwide data (about 90 m)', step: 40 },
 };
 
@@ -70,8 +74,20 @@ export async function prefetchArea(bounds, onProgress, maxNodes = 12000) {
     if (tiles.length > 60) throw new Error(`The area is too large to save Kentucky LiDAR for (${tiles.length} tiles, limit 60). Save it in parts.`);
     try {
       await kyLoad(tiles, onProgress);
-      if (tiles.every(t => kyTiles.get(ky.tileKey(t.i, t.j)))) return { source: 'ky', tiles: tiles.length };
-    } catch { /* fall through to the worldwide data */ }
+      if (tiles.every(t => kyTiles.get(ky.tileKey(t.i, t.j)))) {
+        try { await dsmLoad(tiles); } catch { /* the surface model is optional (tree and building warning) */ }
+        return { source: 'ky', tiles: tiles.length };
+      }
+    } catch { /* fall through to 3DEP, then the worldwide data */ }
+  }
+  if (d3.covers3dep(corners)) {
+    const tiles = d3.tilesFor(bounds);
+    if (tiles.length <= 150) {
+      try {
+        await d3Load(tiles, onProgress);
+        if (tiles.every(t => d3Tiles.get(d3.tileKey(t.i, t.j)))) return { source: 'd3', tiles: tiles.length };
+      } catch { /* fall through to the worldwide data */ }
+    }
   }
   const keys = latticeNodes(bounds, CELL);
   if (keys.length > maxNodes) throw new Error(`The area is too large to save every ground height (${keys.length} points, limit ${maxNodes}).`);
@@ -87,6 +103,8 @@ export async function storedFraction(bounds) {
     const tiles = ky.tilesFor(bounds);
     const vals = await store.getMany('elev', tiles.map(t => ky.tileKey(t.i, t.j)));
     if (vals.every(v => v && v !== 'none')) return 1;
+    const v3 = await store.getMany('elev', d3.tilesFor(bounds).map(t => d3.tileKey(t.i, t.j)));
+    if (v3.length && v3.every(v => v && v !== 'none')) return 1;
   }
   const keys = latticeNodes(bounds, CELL);
   if (!keys.length || keys.length > 50000) return 0;
@@ -132,6 +150,110 @@ export async function kyElevations(points, onProgress) {
   return points.map(p => { const t = ky.tileOf(p.lat, p.lon); return ky.sampleTile(kyTiles.get(ky.tileKey(t.i, t.j)), t.i, t.j, p.lat, p.lon); });
 }
 
+// ---------- USGS 3DEP tiles and Kentucky surface (DSM) tiles ----------
+
+const d3Tiles = new Map();
+const dsmTiles = new Map();
+
+// Fetches one tile (memory, then device storage, then the network) and keeps it for offline use.
+async function cachedTile(mem, key, url, decode, label) {
+  if (mem.has(key)) return mem.get(key);
+  const saved = await store.get('elev', key);
+  if (saved !== undefined) { mem.set(key, saved === 'none' ? null : saved); return mem.get(key); }
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    try { res = await fetch(url); }
+    catch { throw new Error(isOffline() ? 'offline and not saved' : `could not reach the ${label} service`); }
+    if (res.ok || attempt >= 2 || (res.status !== 429 && res.status < 500)) break;
+    await sleep(2000 * (attempt + 1));
+  }
+  if (!res.ok) throw new Error(`${label} service error ${res.status}`);
+  const data = decode(await res.arrayBuffer());
+  mem.set(key, data);
+  await store.set('elev', key, data || 'none');
+  return data;
+}
+
+async function loadAll(tiles, one, onProgress) {
+  let done = 0;
+  const queue = [...tiles];
+  const worker = async () => { while (queue.length) { await one(queue.shift()); onProgress?.(++done, tiles.length); } };
+  await Promise.all([worker(), worker(), worker()]);
+}
+
+const d3Load = (tiles, onProgress) => loadAll(tiles, ({ i, j }) => cachedTile(d3Tiles, d3.tileKey(i, j), d3.tileUrl(i, j), d3.decodeTile, 'USGS elevation'), onProgress);
+const dsmLoad = (tiles, onProgress) => loadAll(tiles, ({ i, j }) => cachedTile(dsmTiles, dsm.tileKey(i, j), dsm.tileUrl(i, j), dsm.decodeTile, 'Kentucky surface'), onProgress);
+
+const uniqueTiles = (points, tileOf) => {
+  const seen = new Map();
+  for (const p of points) { const t = tileOf(p.lat, p.lon); seen.set(t.i + ',' + t.j, t); }
+  return [...seen.values()];
+};
+
+/** USGS 3DEP heights for the points (null where there is no data). Throws if tiles cannot be loaded. */
+export async function d3Elevations(points, onProgress) {
+  await d3Load(uniqueTiles(points, d3.tileOf), onProgress);
+  return points.map(p => { const t = d3.tileOf(p.lat, p.lon); return d3.sampleTile(d3Tiles.get(d3.tileKey(t.i, t.j)), t.i, t.j, p.lat, p.lon); });
+}
+
+/** Kentucky first-return surface heights (tree and building tops) for the points; null where unknown. */
+export async function dsmElevations(points, onProgress) {
+  await dsmLoad(uniqueTiles(points, dsm.tileOf), onProgress);
+  return points.map(p => { const t = dsm.tileOf(p.lat, p.lon); return dsm.sampleTile(dsmTiles.get(dsm.tileKey(t.i, t.j)), t.i, t.j, p.lat, p.lon); });
+}
+
+/**
+ * Picks the ground source for a mission and returns the heights of all points from that one source:
+ * Kentucky LiDAR, then 3DEP, then worldwide. Never mixes sources.
+ */
+export async function groundHeights(pts, onProgress) {
+  const notes = [];
+  if (ky.inKentuckyBox(pts)) {
+    try {
+      const g = await kyElevations(pts, onProgress);
+      if (g.every(v => v !== null)) return { all: g, source: 'ky', note: null };
+      notes.push('Part of this mission or the takeoff point is outside the Kentucky LiDAR data');
+    } catch (e) { notes.push(`Kentucky LiDAR not available (${e.message})`); }
+  }
+  if (d3.covers3dep(pts)) {
+    try {
+      const g = await d3Elevations(pts, onProgress);
+      if (g.every(v => v !== null)) return { all: g, source: 'd3', note: notes.length ? notes[0] + ', so USGS 3DEP was used for all of it.' : null };
+      notes.push('Part of this mission or the takeoff point is outside the USGS 3DEP data');
+    } catch (e) { notes.push(`USGS 3DEP not available (${e.message})`); }
+  }
+  const all = await getElevations(pts, onProgress);
+  return { all, source: 'global', note: notes.length ? notes.join('; ') + ', so the coarser worldwide data was used for all of it.' : null };
+}
+
+/**
+ * Tree and building clearance along a planned route (Kentucky only, where a surface model exists).
+ * Waypoints need `height` and `ground`. Returns { analysis, profile: [{ d, surface }] } (surface relative to the
+ * takeoff ground, d = metres along the route as in the height profile), or null if no surface data is available.
+ */
+export async function routeClearance(waypoints, homeGround, { step = 5, onProgress } = {}) {
+  if (waypoints.length < 2 || !ky.inKentuckyBox(waypoints)) return null;
+  const legs = [];
+  let total = 0;
+  for (let i = 0; i + 1 < waypoints.length; i++) { const len = haversine(waypoints[i], waypoints[i + 1]); legs.push(len); total += len; }
+  const stp = Math.max(step, total / 4000);
+  const pts = [];
+  let base = 0;
+  waypoints.forEach((a, i) => {
+    if (i === 0) pts.push({ d: 0, lat: a.lat, lon: a.lon, h: a.height });
+    if (i + 1 >= waypoints.length) return;
+    const b = waypoints[i + 1], n = Math.max(1, Math.ceil(legs[i] / stp));
+    for (let k = 1; k <= n; k++) { const t = k / n; pts.push({ d: base + legs[i] * t, lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t, h: a.height + (b.height - a.height) * t }); }
+    base += legs[i];
+  });
+  let surface, ground;
+  try { [surface, ground] = [await dsmElevations(pts, onProgress), await kyElevations(pts)]; } catch { return null; }
+  const samples = pts.map((p, i) => ({ d: p.d, drone: homeGround + p.h, ground: ground[i], surface: surface[i] }));
+  const analysis = dsm.analyzeClearance(samples);
+  if (!analysis) return null;
+  return { analysis, profile: samples.filter(s => s.surface !== null).map(s => ({ d: s.d, surface: s.surface - homeGround })) };
+}
+
 // ---------- Worldwide (Open-Meteo) ----------
 
 export async function getElevations(points, onProgress) {
@@ -162,17 +284,7 @@ export async function getElevations(points, onProgress) {
 export async function applyTerrain(waypoints, home, agl, { densify = false, tolerance = 5, sampleStep, onProgress } = {}) {
   const wps = waypoints.filter(w => !w.terrainPoint).map(w => ({ ...w }));
   const pts = [home, ...wps];
-  let source = 'global', note = null, all = null;
-  if (ky.inKentuckyBox(pts)) {
-    try {
-      const g = await kyElevations(pts, onProgress);
-      if (g.every(v => v !== null)) { all = g; source = 'ky'; }
-      else note = 'Part of this mission or the takeoff point is outside the Kentucky LiDAR data, so the coarser worldwide data was used for all of it.';
-    } catch (e) {
-      note = `Kentucky LiDAR not available (${e.message}), so the coarser worldwide data was used.`;
-    }
-  }
-  if (!all) all = await getElevations(pts, onProgress);
+  const { all, source, note } = await groundHeights(pts, onProgress);
   const [homeGround, ...grounds] = all;
   wps.forEach((w, i) => { w.ground = grounds[i]; w.height = round1(agl + grounds[i] - homeGround); });
   if (!densify || wps.length < 2) return { waypoints: wps, homeGround, inserted: 0, source, note };
@@ -187,7 +299,7 @@ export async function applyTerrain(waypoints, home, agl, { densify = false, tole
       samples.push({ seg: i, t, lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t });
     }
   }
-  const elev = source === 'ky' ? await kyElevations(samples, onProgress) : await getElevations(samples, onProgress);
+  const elev = source === 'ky' ? await kyElevations(samples, onProgress) : source === 'd3' ? await d3Elevations(samples, onProgress) : await getElevations(samples, onProgress);
   const worst = new Map();
   samples.forEach((s, j) => {
     if (elev[j] === null) return;

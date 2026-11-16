@@ -5,6 +5,7 @@ import { readFile, buildKmz } from './wpml.js';
 import { gridMetrics } from './grid.js';
 import { microSdPackage, microSdReadme } from './exporters.js';
 import { buildChecklist, checklistHtml, checklistText } from './checklist.js';
+import { movingPhotos } from './blur.js';
 import * as helper from './installer.js';
 import { CONTROLLERS, HELPER_CONTROLLERS } from './presets.js';
 import { $, state, on, emit, toast, esc, fmtTime, download } from './state.js';
@@ -26,6 +27,7 @@ export function checklistCtx() {
     missions, home: state.home || state.waypoints[0] || null, homeGround: state.homeGround, droneKey: s.droneKey, controller: s.controller,
     captureMode: state.plan?.captureMode || 'waypoint', interval: state.plan?.interval ?? null, alt: s.alt, gsd: state.plan?.gsd ?? m.gsd,
     photoCount: photoEstimate(missions), finishAction: FINISH[s.finish] || s.finish,
+    unit: state.unit, speed: state.plan?.speed ?? s.speed, moving: movingPhotos({ turnMode: s.turnMode, captureMode: state.plan?.captureMode }),
   };
 }
 

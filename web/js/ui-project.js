@@ -3,19 +3,20 @@
 
 import { projectToJson, projectFromJson, bytesToBase64, base64ToBytes, toGeoJSON, toKml, microSdPackage } from './exporters.js';
 import { readFile } from './wpml.js';
-import { $, state, on, emit, toast, pref, setPref, dropPref, debounce, download, esc } from './state.js';
+import { $, state, areaList, keepoutList, on, emit, toast, pref, setPref, dropPref, debounce, download, esc, fmtArea } from './state.js';
 import { settingsSnapshot, applySettings, computeMissions, buildMissionFiles, startOver } from './plan.js';
-import { centroid, polygonAreaM2 } from './geo.js';
+import { centroid } from './geo.js';
+import { netAreaM2 } from './avoid.js';
 import { GOALS } from './presets.js';
 import * as store from './store.js';
 
 let b64Cache = { bytes: null, text: null };
 
-const hasContent = () => !!(state.waypoints.length || state.polygon.length || state.center || state.line.length);
+const hasContent = () => !!(state.waypoints.length || state.polygon.length || state.areas.length || state.keepouts.length || state.center || state.line.length);
 
 function projectObject(withKmz) {
   const o = {
-    polygon: state.polygon, waypoints: state.waypoints, home: state.home, homeGround: state.homeGround, fileName: state.fileName,
+    polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, waypoints: state.waypoints, home: state.home, homeGround: state.homeGround, fileName: state.fileName,
     settings: { ...settingsSnapshot(), _ui: { easy: state.easy, step: state.step, unit: state.unit } },
     generated: {
       generated: state.generated, plan: state.plan, center: state.center, line: state.line, homeUser: state.homeUser, homeKey: state.homeKey,
@@ -46,7 +47,7 @@ function summary() {
   return {
     goal: GOALS[state.goal]?.title || state.goal,
     waypoints: state.waypoints.length, missions: ms.length, flown: ms.filter(m => m.flown).length,
-    areaM2: state.polygon.length >= 3 ? polygonAreaM2(state.polygon) : 0,
+    areaM2: netAreaM2(areaList(), keepoutList()),
   };
 }
 
@@ -77,7 +78,7 @@ async function applyProject(p, { id = null, name = null } = {}) {
   applySettings(p.settings);
   const g = p.generated || {};
   Object.assign(state, {
-    polygon: p.polygon, waypoints: p.waypoints, home: p.home, homeGround: p.homeGround, fileName: p.fileName,
+    polygon: p.polygon, areas: (p.areas || []).filter(a => a.length >= 3), keepouts: (p.keepouts || []).filter(a => a.length >= 3), waypoints: p.waypoints, home: p.home, homeGround: p.homeGround, fileName: p.fileName,
     generated: !!g.generated, plan: g.plan ?? null, center: g.center ?? null, line: g.line ?? [], homeUser: !!g.homeUser, homeKey: g.homeKey ?? null,
     terrainStale: !!g.terrainStale, pristine: !!g.pristine, selected: -1, undo: [], redo: [], source: null, sourceBytes: null,
     progress: g.progress ?? null, projectId: id, projectName: name || g.projectName || null,
@@ -94,7 +95,7 @@ async function applyProject(p, { id = null, name = null } = {}) {
   if (ui) emit('uiState', ui);
   emit('render');
   emit('plan', { restored: true });
-  emit('fit', state.polygon.length ? state.polygon : state.waypoints.length ? state.waypoints : state.line.length ? state.line : state.center ? [state.center] : []);
+  emit('fit', state.polygon.length ? state.polygon.concat(...state.areas) : state.waypoints.length ? state.waypoints : state.line.length ? state.line : state.center ? [state.center] : []);
 }
 
 export async function restoreLast() {
@@ -102,7 +103,7 @@ export async function restoreLast() {
   if (!txt) return false;
   try {
     const p = projectFromJson(txt);
-    if (!p.polygon.length && !p.waypoints.length && !p.settings?.goal && !p.generated?.center && !(p.generated?.line || []).length) return false;
+    if (!p.polygon.length && !(p.areas || []).length && !p.waypoints.length && !p.settings?.goal && !p.generated?.center && !(p.generated?.line || []).length) return false;
     await applyProject(p, { id: pref('projectId', null) });
     $('restoreName').textContent = state.projectName ? `“${state.projectName}”` : 'your last project';
     $('restoreNote').hidden = false;
@@ -156,7 +157,6 @@ async function deleteProject(id) {
   toast('Project deleted.');
 }
 
-const fmtArea = m2 => m2 >= 1e6 ? `${(m2 / 1e6).toFixed(2)} km²` : m2 >= 1e4 ? `${(m2 / 1e4).toFixed(1)} ha` : `${Math.round(m2)} m²`;
 
 async function renderProjects() {
   const list = (await store.all('projects')).sort((a, b) => b.modified - a.modified);
@@ -228,8 +228,8 @@ const EXPORTS = {
     const files = await buildMissionFiles();
     download(await microSdPackage(files.map(f => ({ blob: f.blob })), { baseName: (state.fileName || 'gridfly').replace(/\.kmz$/i, '') }), 'GridFly-microSD.zip');
   },
-  expKml: () => download(new Blob([toKml({ polygon: state.polygon, missions: withNames(computeMissions()), home: state.home })], { type: 'application/vnd.google-earth.kml+xml' }), 'gridfly.kml'),
-  expGeo: () => download(new Blob([JSON.stringify(toGeoJSON({ polygon: state.polygon, missions: computeMissions(), home: state.home }))], { type: 'application/geo+json' }), 'gridfly.geojson'),
+  expKml: () => download(new Blob([toKml({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: withNames(computeMissions()), home: state.home })], { type: 'application/vnd.google-earth.kml+xml' }), 'gridfly.kml'),
+  expGeo: () => download(new Blob([JSON.stringify(toGeoJSON({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: computeMissions(), home: state.home }))], { type: 'application/geo+json' }), 'gridfly.geojson'),
 };
 
 function syncExportMenu() {

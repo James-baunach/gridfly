@@ -1,6 +1,8 @@
 // Pre-flight checklist with numbers worked out for this specific mission, in beginner language.
 
 import { haversine } from './geo.js';
+import { fmtLen as fmtLenU, fmtSmall, toDisplay, fmtSpeed } from './units.js';
+import { neededShutter, SLOWEST } from './blur.js';
 
 const MB_PER_PHOTO = 12; // Mavic 3 family 4/3 Hasselblad 20 MP JPEG, typical
 const DRONES = { mavic3: 'Mavic 3', mavic3classic: 'Mavic 3 Classic', mavic3pro: 'Mavic 3 Pro' };
@@ -13,7 +15,9 @@ const ceilTo = (v, step) => Math.ceil(v / step - 1e-9) * step;
 const item = (text, level = 'todo', extra = {}) => ({ text, level, ...extra });
 
 export function buildChecklist(ctx) {
-  const { missions = [], home, homeGround = null, droneKey = 'mavic3', controller = 'rc', captureMode = 'waypoint', interval = null, alt, gsd, photoCount = 0, finishAction } = ctx;
+  const { missions = [], home, homeGround = null, droneKey = 'mavic3', controller = 'rc', captureMode = 'waypoint', interval = null, alt, gsd, photoCount = 0, finishAction, unit = 'm', speed = null, moving = false } = ctx;
+  const ft = unit === 'ft';
+  const L = (m, d = 0) => fmtLenU(m, unit, d);
   const drone = DRONES[droneKey] || 'Mavic 3';
   const pts = missions.flatMap(m => m.points || []);
   const heights = pts.map(p => p.height);
@@ -24,9 +28,14 @@ export function buildChecklist(ctx) {
   const batteries = n + 1;
   const sdGb = photoCount * MB_PER_PHOTO / 1000;
   const sdShown = sdGb < 10 ? sdGb.toFixed(1) : Math.ceil(sdGb);
-  const maxAlt = ceilTo(maxH + 10, 10);
-  const rth = ceilTo(maxH + 15, 5);
-  const maxDist = ceilTo(far + 100, 100);
+  // Rounded in the unit shown, so the numbers look natural (DJI Fly shows its own unit setting).
+  const up = (m, pad, step) => ft ? ceilTo(toDisplay(m, 'ft') + pad.ft, step.ft) : ceilTo(m + pad.m, step.m);
+  const maxAlt = up(maxH, { m: 10, ft: 30 }, { m: 10, ft: 25 });
+  const rth = up(maxH, { m: 15, ft: 50 }, { m: 5, ft: 25 });
+  const maxDist = up(far, { m: 100, ft: 300 }, { m: 100, ft: 500 });
+  const u = ft ? 'ft' : 'm';
+  const blur = neededShutter({ speed, gsdCm: gsd, moving });
+  const shutterDen = blur ? blur.denominator : SLOWEST;
   const timer = captureMode === 'timer';
 
   const stops = [];
@@ -36,25 +45,25 @@ export function buildChecklist(ctx) {
   const agl = p => p.ground != null && homeGround != null ? p.height - (p.ground - homeGround) : p.height;
   const maxAgl = pts.length ? Math.max(...pts.map(agl)) : 0;
   const minAgl = pts.length ? Math.min(...pts.map(agl)) : 0;
-  if (pts.length && maxAgl > 120) stops.push(item(`Your flight reaches ${Math.round(maxAgl)} m above the ground, over the 120 m (400 ft) limit in many countries.`, 'stop', { detail: 'Check your local rules before flying, or lower the flight height and regenerate.' }));
-  if (pts.length && maxH > 500) stops.push(item(`Your highest waypoint is ${Math.round(maxH)} m above takeoff. DJI Fly cannot go higher than 500 m above takeoff.`, 'stop', { detail: 'Take off from higher ground, or split the area so each part is flown from a nearby takeoff point.' }));
-  if (pts.length && minAgl < 5) stops.push(item(`Some waypoints are only ${minAgl.toFixed(1)} m above the ground. The drone could hit the ground or something near it.`, 'stop', { detail: 'Raise the flight height, or check terrain heights and the takeoff point.' }));
-  if (pts.length && minH < 0) stops.push(item(`Some waypoints are below your takeoff point (lowest ${Math.round(minH)} m). That is normal when the area slopes downhill, but double-check the route in DJI Fly before flying.`, 'warn'));
+  if (pts.length && maxAgl > 120) stops.push(item(`Your flight reaches ${L(maxAgl)} above the ground, over the ${ft ? '400 ft (120 m)' : '120 m (400 ft)'} limit in many countries.`, 'stop', { detail: 'Check your local rules before flying, or lower the flight height and regenerate.' }));
+  if (pts.length && maxH > 500) stops.push(item(`Your highest waypoint is ${L(maxH)} above takeoff. DJI Fly cannot go higher than ${L(500)} above takeoff.`, 'stop', { detail: 'Take off from higher ground, or split the area so each part is flown from a nearby takeoff point.' }));
+  if (pts.length && minAgl < 5) stops.push(item(`Some waypoints are only ${L(minAgl, 1)} above the ground. The drone could hit the ground or something near it.`, 'stop', { detail: 'Raise the flight height, or check terrain heights and the takeoff point.' }));
+  if (pts.length && minH < 0) stops.push(item(`Some waypoints are below your takeoff point (lowest ${L(minH)}). That is normal when the area slopes downhill, but double-check the route in DJI Fly before flying.`, 'warn'));
 
   const home1 = [
     item(`Charge ${batteries} batteries fully`, 'todo', { value: `${batteries}`, detail: `${n} for the ${n === 1 ? 'mission' : 'missions'} plus 1 spare. Each mission is flown on its own battery.` }),
     item(`Make sure the SD card has at least ${sdShown} GB free`, 'todo', { value: `${sdShown} GB`, detail: `${photoCount} photos at about ${MB_PER_PHOTO} MB each (${drone} 20 MP JPEG). Use a fast card (UHS-I U3 or better) and format it before you go if you have already copied the old photos off.` }),
     item(`Update DJI Fly and the ${drone} firmware, and update your controller (${CONTROLLERS[controller] || controller})`, 'todo', { detail: 'Do this at home on Wi-Fi, not in the field. Do not update right before a flight in case something changes.' }),
     item(`Save ${n} placeholder ${n === 1 ? 'mission' : 'missions'} in DJI Fly (Waypoint, then create and save)`, 'todo', { value: `${n}`, detail: 'GridFly replaces the contents of each saved mission with your planned waypoints.' }),
-    item('Check the weather and wind forecast for your flight time', 'todo', { detail: 'Wind over about 7 m/s (25 km/h) at flight height, rain, or very low sun all make bad maps.' }),
+    item('Check the weather and wind forecast for your flight time', 'todo', { detail: `Wind over about ${ft ? '15 mph' : '7 m/s (25 km/h)'} at flight height, rain, or very low sun all make bad maps.` }),
   ];
   if (home1.length && finishAction) home1.push(item(`When each mission ends the drone will: ${finishAction}`, 'info'));
 
-  const heightNote = Number.isFinite(alt) ? ` Your planned height is ${Math.round(alt)} m above ground${Number.isFinite(gsd) ? `, giving about ${gsd.toFixed(1)} cm per pixel` : ''}.` : '';
+  const heightNote = Number.isFinite(alt) ? ` Your planned height is ${L(alt)} above ground${Number.isFinite(gsd) ? `, giving about ${fmtSmall(gsd, unit)} per pixel` : ''}.` : '';
   const safety = [
-    item('Max altitude', 'todo', { value: `${maxAlt} m or more`, detail: `Your highest waypoint is ${Math.round(maxH)} m above takeoff, so set this to at least ${maxAlt} m in DJI Fly (Safety, Max altitude) or the drone will refuse to climb.${heightNote}` }),
-    item('Return-to-home altitude', 'todo', { value: `${rth} m or more`, detail: `Set this at least 15 m above your highest waypoint (${Math.round(maxH)} m) so an automatic return goes over everything you flew past. Also keep it above any trees or buildings nearby.` }),
-    item('Max distance', 'todo', { value: `${maxDist} m or No limit`, detail: `Your farthest waypoint is about ${Math.round(far)} m from takeoff. Set at least ${maxDist} m, or choose No limit.` }),
+    item('Max altitude', 'todo', { value: `${maxAlt} ${u} or more`, detail: `Your highest waypoint is ${L(maxH)} above takeoff, so set this to at least ${maxAlt} ${u} in DJI Fly (Safety, Max altitude) or the drone will refuse to climb.${heightNote}` }),
+    item('Return-to-home altitude', 'todo', { value: `${rth} ${u} or more`, detail: `Set this at least ${L(15)} above your highest waypoint (${L(maxH)}) so an automatic return goes over everything you flew past. Also keep it above any trees or buildings nearby.` }),
+    item('Max distance', 'todo', { value: `${maxDist} ${u} or No limit`, detail: `Your farthest waypoint is about ${L(far)} from takeoff. Set at least ${maxDist} ${u}, or choose No limit.` }),
     item('Obstacle avoidance', 'todo', { value: 'Brake', detail: 'Set it to Brake, not Bypass. Bypass can steer the drone off the flight path and leave gaps in your map. Remember the drone cannot see wires or thin branches.' }),
     item('Signal lost action', 'todo', { value: 'Return to home', detail: 'If the controller loses contact the drone should fly home, not hover or land where it is.' }),
   ];
@@ -65,10 +74,10 @@ export function buildChecklist(ctx) {
       : item('Photo mode: Single shot', 'todo', { detail: 'The mission takes each photo itself at every waypoint, so do not use Timed Shot.' }),
     item('Format: JPEG', 'todo', { detail: 'JPEG is fine for mapping and keeps files small. Raw files are bigger and slower to process.' }),
     item('Aspect ratio: 4:3', 'todo', { detail: 'This uses the full sensor, so you get the most overlap per photo.' }),
-    item('Switch to Pro mode and use shutter priority (S): 1/1000 s or faster', 'todo', { value: '1/1000 s+', detail: `A fast shutter stops motion blur from the moving drone and reduces rolling-shutter skew, which warps buildings and ruins the map. In low light raise ISO instead of slowing the shutter.${droneKey === 'mavic3pro' ? ' On the Mavic 3 Pro use the main (Hasselblad) camera, not the tele cameras.' : ''}` }),
+    item(`Switch to Pro mode and use shutter priority (S): 1/${shutterDen} s or faster`, 'todo', { value: `1/${shutterDen} s+`, detail: `${blur ? `Photos are taken while the drone moves at ${fmtSpeed(speed, unit)}, which needs about 1/${shutterDen} s so the picture smears by less than one pixel. ` : ''}A fast shutter stops motion blur from the moving drone and reduces rolling-shutter skew, which warps buildings and ruins the map. In low light raise ISO instead of slowing the shutter.${droneKey === 'mavic3pro' ? ' On the Mavic 3 Pro use the main (Hasselblad) camera, not the tele cameras.' : ''}` }),
     item('ISO: Auto, with the maximum set to 800', 'todo', { value: 'max 800', detail: 'Higher ISO makes grainy photos that map software matches poorly.' }),
     item('White balance: fixed (Sunny or Cloudy), not Auto', 'todo', { detail: 'Auto white balance changes colour from photo to photo and leaves visible patches in the final map.' }),
-    item('Focus: tap the ground on the screen at flight height, then keep auto focus', 'todo', { detail: `Do this once the drone is hovering at ${Number.isFinite(alt) ? Math.round(alt) + ' m' : 'mission height'}, looking straight down, so the ground is sharp for every photo.` }),
+    item('Focus: tap the ground on the screen at flight height, then keep auto focus', 'todo', { detail: `Do this once the drone is hovering at ${Number.isFinite(alt) ? L(alt) : 'mission height'}, looking straight down, so the ground is sharp for every photo.` }),
     item('Gimbal pointing straight down (-90°)', 'todo', { value: '-90°' }),
     item('Turn off Night mode, Hyperlapse and any other special shooting modes', 'todo'),
   ];

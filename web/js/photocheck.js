@@ -207,10 +207,13 @@ function bufferPolygon(poly, d) {
  * Count footprint coverage over the survey polygon on a cellM grid.
  * Gaps are convex hulls of connected under-covered cells, grown by half a footprint.
  */
-export function coverage(polygon, footprints, cellM = 4, minOverlapCount = 4) {
-  const c = centroid(polygon);
+export function coverage(polygon, footprints, cellM = 4, minOverlapCount = 4, { areas = [], keepouts = [] } = {}) {
+  const all = [polygon, ...areas];
+  const c = centroid(all.flat());
   const proj = makeProjection(c.lat, c.lon);
-  const poly = polygon.map(p => proj.toXY(p.lat, p.lon));
+  const polys = all.map(a => a.map(p => proj.toXY(p.lat, p.lon)));
+  const holes = keepouts.filter(k => k.length >= 3).map(k => k.map(p => proj.toXY(p.lat, p.lon)));
+  const poly = polys.flat();
   const fps = footprints.map(f => f.map(p => proj.toXY(p.lat, p.lon)))
     .map(xy => ({ xy, minX: Math.min(...xy.map(p => p[0])), maxX: Math.max(...xy.map(p => p[0])), minY: Math.min(...xy.map(p => p[1])), maxY: Math.max(...xy.map(p => p[1])) }));
   const x0 = Math.min(...poly.map(p => p[0])), x1 = Math.max(...poly.map(p => p[0]));
@@ -221,7 +224,7 @@ export function coverage(polygon, footprints, cellM = 4, minOverlapCount = 4) {
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
       const x = x0 + (i + 0.5) * cellM, y = y0 + (j + 0.5) * cellM;
-      if (!inside(poly, x, y)) continue;
+      if (!polys.some(a => inside(a, x, y)) || holes.some(h => inside(h, x, y))) continue;
       let count = 0;
       for (const f of fps) if (x >= f.minX && x <= f.maxX && y >= f.minY && y <= f.maxY && inside(f.xy, x, y)) count++;
       const cell = { ...proj.toLL(x, y), count, i, j };
@@ -259,7 +262,7 @@ export function coverage(polygon, footprints, cellM = 4, minOverlapCount = 4) {
 
 // ---------- Orchestrator ----------
 
-export async function analyzePhotos(files, { polygon, cam, home, minOverlapCount = 4, cellM = 4, onProgress } = {}) {
+export async function analyzePhotos(files, { polygon, areas = [], keepouts = [], cam, home, minOverlapCount = 4, cellM = 4, onProgress } = {}) {
   const photos = [], fps = [];
   let oblique = 0;
   for (let i = 0; i < files.length; i++) {
@@ -275,7 +278,7 @@ export async function analyzePhotos(files, { polygon, cam, home, minOverlapCount
     onProgress?.(i + 1, files.length);
   }
   flagBlurry(photos.map(p => p.blur ?? NaN)).forEach(i => { photos[i].blurry = true; });
-  const cov = coverage(polygon, fps, cellM, minOverlapCount);
+  const cov = coverage(polygon, fps, cellM, minOverlapCount, { areas, keepouts });
   const count = photos.length;
   const withGps = photos.filter(p => p.meta.lat != null).length;
   const blurry = photos.filter(p => p.blurry).length;

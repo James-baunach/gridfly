@@ -1,12 +1,18 @@
 // Pre-flight site checks: weather (Open-Meteo), nearby obstacles (OSM Overpass), US airspace (FAA UAS Facility Map).
 
 import { sunPosition } from './sun.js';
+import { fmtSpeed } from './units.js';
 
 const WEATHER_API = 'https://api.open-meteo.com/v1/forecast';
 // Public Overpass instances, tried in order.
 const OVERPASS_APIS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 const FAA_API = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query';
 export const FAA_VIEWER = 'https://faa.maps.arcgis.com/apps/webappviewer/index.html?id=9c2e4406710048e19806ebf6a06754ad';
+// NOAA Space Weather Prediction Center: planetary K index, observed + 3-day forecast (CORS: Access-Control-Allow-Origin *).
+const KP_API = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
+// The FAA's TFR list and geometry services send no CORS headers, so a browser cannot read them: we only link to the site.
+export const FAA_TFR_SITE = 'https://tfr.faa.gov/';
+export const FAA_LAANC_PAGE = 'https://www.faa.gov/uas/getting_started/laanc';
 
 const M_PER_DEG = 111320;
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -32,23 +38,124 @@ function windAt(h, alt) {
   return pts[pts.length - 1][1];
 }
 
-export function judgeHour(h, flightAlt = 60) {
+export function judgeHour(h, flightAlt = 60, unit = 'm') {
+  const sp = (ms, d = 1) => fmtSpeed(ms, unit, d);
   const bad = [], ok = [];
   const w = windAt(h, flightAlt);
   if (w != null) {
-    if (w > 10) bad.push(`Wind at flight height ${w.toFixed(1)} m/s (over 10)`);
-    else if (w > 7) ok.push(`Breezy at flight height (${w.toFixed(1)} m/s)`);
+    if (w > 10) bad.push(`Wind at flight height ${sp(w)} (over ${sp(10, 0)})`);
+    else if (w > 7) ok.push(`Breezy at flight height (${sp(w)})`);
   }
   if (h.gusts != null) {
-    if (h.gusts > 12) bad.push(`Gusts ${h.gusts.toFixed(1)} m/s (over 12)`);
-    else if (h.gusts > 10) ok.push(`Gusty (${h.gusts.toFixed(1)} m/s)`);
+    if (h.gusts > 12) bad.push(`Gusts ${sp(h.gusts)} (over ${sp(12, 0)})`);
+    else if (h.gusts > 10) ok.push(`Gusty (${sp(h.gusts)})`);
   }
   if (h.rain != null && h.rain > 40) bad.push(`${Math.round(h.rain)}% chance of rain`);
   if (h.temp != null && h.temp < -10) bad.push(`Too cold (${Math.round(h.temp)} °C)`);
   if (h.temp != null && h.temp > 40) bad.push(`Too hot (${Math.round(h.temp)} °C)`);
+  if (h.kp != null) {
+    if (h.kp >= 7) bad.push(`Strong geomagnetic storm (Kp ${fmtKp(h.kp)}): GPS and compass may fail`);
+    else if (h.kp >= 5) ok.push(`Geomagnetic storm (Kp ${fmtKp(h.kp)}): watch GPS and compass`);
+  }
   if (h.sunElevation <= 0) bad.push('Sun below the horizon');
   else if (h.sunElevation < 25 && (h.cloud == null || h.cloud < 70)) ok.push(`Low sun (${Math.round(h.sunElevation)}°) makes long shadows`);
   return bad.length ? { verdict: 'bad', reasons: bad } : ok.length ? { verdict: 'ok', reasons: ok } : { verdict: 'good', reasons: [] };
+}
+
+const fmtKp = kp => (Math.round(kp * 10) / 10).toString();
+
+// ---------- Geomagnetic activity (Kp) ----------
+
+// NOAA rows -> [{ time (ms, start of the 3 h slot), kp, kind: 'observed'|'estimated'|'predicted' }], oldest first. Times are UTC.
+export function parseKp(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map(r => ({ time: Date.parse(String(r.time_tag ?? '') + 'Z'), kp: Number(r.kp ?? r.Kp), kind: r.observed || 'observed' }))
+    .filter(r => Number.isFinite(r.time) && Number.isFinite(r.kp) && r.kp >= 0 && r.kp <= 9)
+    .sort((a, b) => a.time - b.time);
+}
+
+// Kp of the 3-hour slot containing `time` (Date or ms), or null when the forecast does not reach it.
+export function kpAt(slots, time) {
+  const t = +time;
+  const s = (slots || []).find(x => t >= x.time && t < x.time + 3 * 3600000);
+  return s ? s.kp : null;
+}
+
+// Plain words for a Kp value.
+export function kpWords(kp) {
+  if (kp == null) return 'unknown';
+  if (kp >= 8) return 'severe geomagnetic storm';
+  if (kp >= 7) return 'strong geomagnetic storm';
+  if (kp >= 6) return 'moderate geomagnetic storm';
+  if (kp >= 5) return 'minor geomagnetic storm';
+  if (kp >= 4) return 'a little unsettled';
+  return 'quiet';
+}
+
+export const kpLevel = kp => kp == null ? null : kp >= 7 ? 'bad' : kp >= 5 ? 'ok' : 'good';
+
+// Current Kp and the highest Kp in the next `hours` hours.
+export function kpSummary(slots, now = new Date(), hours = 24) {
+  const t = +now;
+  const cur = (slots || []).find(x => t >= x.time && t < x.time + 3 * 3600000) || null;
+  const ahead = (slots || []).filter(x => x.time + 3 * 3600000 > t && x.time < t + hours * 3600000);
+  if (!cur && !ahead.length) return null;
+  const peak = ahead.reduce((m, x) => (!m || x.kp > m.kp ? x : m), null);
+  return { now: cur ? cur.kp : null, peak: peak ? peak.kp : null, peakAt: peak ? new Date(peak.time) : null, hours };
+}
+
+export async function fetchKp() {
+  const slots = parseKp(await getJson(KP_API, undefined, 'geomagnetic (NOAA)'));
+  if (!slots.length) throw new Error('The geomagnetic (NOAA) service returned no data.');
+  return slots;
+}
+
+// ---------- LAANC ----------
+
+// FAA grid cells (see fetchAirspace) -> what to tell the pilot, or null when the grid has nothing here.
+// Any grid cell means controlled airspace near an airport, where authorisation is needed.
+export function laancAdvice(cells, aglM) {
+  const list = (cells || []).filter(c => Number.isFinite(c.ceiling));
+  if (!list.length) return null;
+  const lowest = Math.min(...list.map(c => c.ceiling));
+  const aglFt = aglM / 0.3048;
+  const airports = [...new Set(list.map(c => c.airport).filter(Boolean))];
+  return { lowestFt: lowest, aglFt, airports, zero: lowest === 0, overCeiling: lowest < aglFt };
+}
+
+// ---------- US national parks ----------
+
+// Overpass elements -> names of National Park Service land (drone launches are prohibited there). Wilderness overlays are ignored.
+export function parseParks(elements) {
+  const names = new Set();
+  for (const el of elements || []) {
+    const t = el.tags || {};
+    if (!/National Park Service/i.test(t.operator || '')) continue;
+    if (t.protected_area === 'wilderness_preserve' || t.protect_class === '1b') continue;
+    names.add(t.name || 'a National Park Service area');
+  }
+  return [...names];
+}
+
+export async function fetchNationalPark(polygon) {
+  if (!polygon?.length) return [];
+  // The centre and up to 5 spread-out outline points: if any lies inside a park, the area touches it.
+  const step = Math.max(1, Math.floor(polygon.length / 5));
+  const pts = [centreOf(polygon), ...polygon.filter((_, i) => i % step === 0).slice(0, 5)];
+  const q = '[out:json][timeout:25];' + pts.map((p, i) => `is_in(${p.lat.toFixed(5)},${p.lon.toFixed(5)})->.a${i};`).join('') +
+    '(' + pts.map((_, i) => `rel(pivot.a${i})[boundary~"^(national_park|protected_area)$"][operator~"National Park Service"];`).join('') + ');out tags;';
+  let d, lastErr;
+  for (const url of OVERPASS_APIS) {
+    try { d = await getJson(url, { method: 'POST', body: new URLSearchParams({ data: q }) }, 'national park (OpenStreetMap)'); break; }
+    catch (e) { lastErr = e; }
+  }
+  if (!d) throw lastErr;
+  if (!Array.isArray(d.elements)) throw new Error('The national park service returned no data.');
+  return parseParks(d.elements);
+}
+
+function centreOf(poly) {
+  return { lat: poly.reduce((a, p) => a + p.lat, 0) / poly.length, lon: poly.reduce((a, p) => a + p.lon, 0) / poly.length };
 }
 
 // Consecutive runs of 'good' hours; falls back to 'ok' runs when there are none.
@@ -72,7 +179,7 @@ export async function fetchWeather(lat, lon, flightAlt = 60) {
   const p = new URLSearchParams({
     latitude: lat.toFixed(4), longitude: lon.toFixed(4),
     hourly: 'wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_gusts_10m,cloud_cover,precipitation_probability,temperature_2m',
-    wind_speed_unit: 'ms', timezone: 'auto', timeformat: 'unixtime', forecast_days: '3',
+    wind_speed_unit: 'ms', timezone: 'auto', timeformat: 'unixtime', forecast_days: '7',
   });
   const d = await getJson(`${WEATHER_API}?${p}`, undefined, 'weather');
   const t = d.hourly?.time;

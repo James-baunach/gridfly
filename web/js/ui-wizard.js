@@ -1,10 +1,13 @@
 // The guided Easy-mode flow (steps 1 to 7), the Easy / Advanced switch, goal and quality presets, and automatic planning.
 
 import { gridMetrics } from './grid.js';
-import { polygonAreaM2, pathLength } from './geo.js';
+import { solveForDetail, solveForBatteries } from './targets.js';
+import { FT, fmtSmall } from './units.js';
+import { pathLength } from './geo.js';
+import { netAreaM2 } from './avoid.js';
 import { GOALS, QUALITY, qualityParams, qualityMatch, detailWords, CONTROLLERS } from './presets.js';
-import { $, state, on, emit, toast, esc, debounce, setPref, pref, setLen, fmtTime, fmtLen, fmtDist } from './state.js';
-import { settings, saveSettings, generate, applyHeights, computeMissions, missingInput, geometryReady, photoEstimate, currentAngle } from './plan.js';
+import { $, state, areaList, keepoutList, on, emit, toast, esc, debounce, setPref, pref, setLen, getGsd, fmtTime, fmtLen, fmtDist, fmtArea } from './state.js';
+import { settings, saveSettings, generate, applyHeights, computeMissions, missionsForAlt, missingInput, geometryReady, photoEstimate, currentAngle } from './plan.js';
 import { startTool, setMode } from './ui-map.js';
 
 const STEPS = ['Drone', 'Where', 'Goal', 'Quality', 'Site', 'Fly', 'After'];
@@ -12,7 +15,7 @@ const STEPS = ['Drone', 'Where', 'Goal', 'Quality', 'Site', 'Fly', 'After'];
 export const PLAN_IDS = ['camera', 'camW', 'camH', 'camF', 'camPx', 'alt', 'speed', 'front', 'side', 'angle', 'overshoot', 'margin', 'marginAuto',
   'gimbal', 'terrain', 'densify', 'tol', 'captureMode', 'crosshatch', 'oblique', 'orbitRadius', 'bldgHeight', 'corridorWidth'];
 
-const anyGeometry = () => state.polygon.length >= 3 || !!state.center || state.line.length >= 2 || state.waypoints.length > 0;
+const anyGeometry = () => areaList().length > 0 || !!state.center || state.line.length >= 2 || state.waypoints.length > 0;
 
 function canNext(n) {
   if (n === 2 && !anyGeometry()) return 'Draw or choose your area on the map first.';
@@ -92,14 +95,64 @@ export function setGoal(goal) {
   }
 }
 
+// ---------- Targets: detail I need, batteries I have ----------
+
+const say = msg => { $('targetNote').textContent = msg; };
+const altStep = () => state.unit === 'ft' ? FT : 1;
+
+function setHeightFromTarget() {
+  saveSettings();
+  emit('render');
+  emit('plan', {});
+}
+
+function applyDetailTarget() {
+  const box = $('targetGsd');
+  if (box.value === '') return say('');
+  const gsd = getGsd('targetGsd');
+  if (!(gsd > 0)) return say('Type a detail size above zero, for example 2 cm per pixel.');
+  const r = solveForDetail(settings().cam, gsd, { step: altStep() });
+  setLen('alt', r.alt);
+  const got = gridMetrics(settings().cam, r.alt, 75, 65).gsd;
+  say(r.clamped
+    ? `${fmtSmall(gsd, state.unit)} per pixel would need ${fmtLen(r.raw)}, which is ${r.clamped === 'low' ? 'lower' : 'higher'} than GridFly allows. Height set to ${fmtLen(r.alt)} instead, which gives about ${fmtSmall(got, state.unit)} per pixel.`
+    : `Height set to ${fmtLen(r.alt)} above the ground for about ${fmtSmall(got, state.unit)} per pixel. Overlap is unchanged.`);
+  setHeightFromTarget();
+}
+
+function applyBatteryTarget() {
+  const n = Math.floor(+$('targetBatteries').value);
+  if ($('targetBatteries').value === '') return say('');
+  if (!(n >= 1)) return say('Type how many batteries you have, for example 3.');
+  if (!geometryReady()) return say('Draw your area first, then GridFly can work out the height.');
+  say('Working it out…');
+  setTimeout(() => {
+    const r = solveForBatteries(n, missionsForAlt, { step: altStep() });
+    const plural = k => `${k} ${k === 1 ? 'mission' : 'missions'}`;
+    if (!r.fits) {
+      return say(Number.isFinite(r.missions)
+        ? `Even at ${fmtLen(r.alt)}, about the highest you may legally fly in most places, this area needs ${plural(r.missions)}, more than the ${n} you have. The height was left as it was. Try a smaller area, less overlap, or a longer time per battery in Advanced.`
+        : 'This area is too big to plan. Try a smaller area.');
+    }
+    setLen('alt', r.alt);
+    say(`Lowest height that fits in ${plural(n)}: ${fmtLen(r.alt)} above the ground (${r.missions === n ? 'uses every battery' : `needs ${plural(r.missions)}`}).`);
+    setHeightFromTarget();
+  }, 30);
+}
+
 // ---------- Rendering ----------
 
 function areaText() {
   const parts = [];
-  if (state.polygon.length >= 3) {
-    const a = polygonAreaM2(state.polygon);
-    parts.push(`Area <b>${(a / 10000).toFixed(2)} ha</b> (${(a / 4046.86).toFixed(2)} acres), ${state.polygon.length} corners. Drag the orange corners to adjust, click the small circles to add a corner, right-click a corner to remove it.`);
+  const areas = areaList(), holes = keepoutList();
+  if (areas.length) {
+    const a = netAreaM2(areas, holes);
+    const what = areas.length > 1 ? `${areas.length} areas` : `${areas[0].length} corners`;
+    const less = holes.length ? `, after taking out ${holes.length} keep-out zone${holes.length > 1 ? 's' : ''}` : '';
+    parts.push(`Area <b>${fmtArea(a)}</b> (${what}${less}). Drag the corners to adjust, click the small circles to add a corner, tap a corner to remove it.` +
+      (areas.length > 1 ? ' Areas are flown nearest to your takeoff point first; areas that overlap are flown twice.' : ''));
   }
+  if (holes.length) parts.push('<b>Keep-out zones</b> (red) are flat on the map, not height limits. The route goes round them, but the takeoff and return flights are not planned around them: you fly the takeoff, and Return to Home flies straight back.');
   if (state.line.length >= 2) parts.push(`Line of <b>${fmtDist(pathLength(state.line))}</b> with ${state.line.length} points.`);
   if (state.center) parts.push('Orbit centre set. Drag it to move.');
   return parts.join('<br>') || 'Search for your site above, then pick a tool to mark the area.';
@@ -198,7 +251,10 @@ export function initWizard() {
   buildNav();
   buildGoals();
   $('droneKey').onchange = () => { $('camera').value = 'mavic3'; };
-  $('quality').oninput = () => { applyQuality(); saveSettings(); emit('render'); emit('plan', {}); };
+  $('targetGsd').onchange = applyDetailTarget;
+  $('targetBatteries').onchange = applyBatteryTarget;
+  $('alt').addEventListener('change', () => say(''));
+  $('quality').oninput = () => { say(''); applyQuality(); saveSettings(); emit('render'); emit('plan', {}); };
   document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => setUi(b.dataset.ui === 'easy'));
   document.querySelectorAll('#dirSeg button').forEach(b => b.onclick = () => {
     state.dir = b.dataset.dir;

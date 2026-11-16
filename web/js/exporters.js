@@ -6,9 +6,11 @@ const closed = poly => {
   return ring;
 };
 
-export function toGeoJSON({ polygon = [], missions = [], home = null }) {
+export function toGeoJSON({ polygon = [], areas = [], keepouts = [], missions = [], home = null }) {
   const features = [];
   if (polygon.length >= 3) features.push({ type: 'Feature', properties: { kind: 'survey_area' }, geometry: { type: 'Polygon', coordinates: [closed(polygon)] } });
+  for (const a of areas) if (a.length >= 3) features.push({ type: 'Feature', properties: { kind: 'survey_area' }, geometry: { type: 'Polygon', coordinates: [closed(a)] } });
+  for (const k of keepouts) if (k.length >= 3) features.push({ type: 'Feature', properties: { kind: 'keep_out' }, geometry: { type: 'Polygon', coordinates: [closed(k)] } });
   missions.forEach((m, i) => {
     features.push({
       type: 'Feature',
@@ -28,14 +30,18 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 const LINE_COLORS = ['ff0080ff', 'ffff8000', 'ff00c800', 'ffc800c8', 'ff0000ff', 'ff00c8c8', 'ffc8c800', 'ff808080'];
 const coords = pts => pts.map(p => `${p.lon},${p.lat},0`).join(' ');
 
-export function toKml({ polygon = [], missions = [], home = null, name = 'GridFly mission' }) {
+export function toKml({ polygon = [], areas = [], keepouts = [], missions = [], home = null, name = 'GridFly mission' }) {
   const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2">', '<Document>', `<name>${esc(name)}</name>`];
   out.push('<Style id="area"><LineStyle><color>ff0080ff</color><width>3</width></LineStyle><PolyStyle><color>4d0080ff</color></PolyStyle></Style>');
   LINE_COLORS.forEach((c, i) => out.push(`<Style id="m${i}"><LineStyle><color>${c}</color><width>3</width></LineStyle></Style>`));
-  if (polygon.length >= 3) {
-    const ring = polygon.concat([polygon[0]]);
-    out.push(`<Placemark><name>Survey area</name><styleUrl>#area</styleUrl><Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${coords(ring)}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`);
-  }
+  out.push('<Style id="keepout"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>660000ff</color></PolyStyle></Style>');
+  const shape = (list, label, style) => list.forEach((poly, i) => {
+    if (poly.length < 3) return;
+    const ring = poly.concat([poly[0]]);
+    out.push(`<Placemark><name>${esc(list.length > 1 ? `${label} ${i + 1}` : label)}</name><styleUrl>#${style}</styleUrl><Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${coords(ring)}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`);
+  });
+  shape([polygon, ...areas], 'Survey area', 'area');
+  shape(keepouts, 'Keep-out zone', 'keepout');
   missions.forEach((m, i) => {
     const label = m.name || `Mission ${i + 1}`;
     out.push(`<Placemark><name>${esc(label)}</name><description>${m.points.length} waypoints, ${Math.round(m.distance || 0)} m, ${Math.round(m.time || 0)} s</description><styleUrl>#m${i % LINE_COLORS.length}</styleUrl><LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>${coords(m.points)}</coordinates></LineString></Placemark>`);
@@ -65,8 +71,8 @@ export function base64ToBytes(str) {
 const isLL = p => p && Number.isFinite(p.lat) && Number.isFinite(p.lon);
 
 export function projectToJson(project) {
-  const { polygon = [], waypoints = [], home = null, homeGround = null, settings = {}, generated = null, fileName = null, sourceKmzBase64 } = project;
-  const out = { app: 'gridfly', version: 1, savedAt: new Date().toISOString(), polygon, waypoints, home, homeGround, settings, generated, fileName };
+  const { polygon = [], areas = [], keepouts = [], waypoints = [], home = null, homeGround = null, settings = {}, generated = null, fileName = null, sourceKmzBase64 } = project;
+  const out = { app: 'gridfly', version: 1, savedAt: new Date().toISOString(), polygon, areas, keepouts, waypoints, home, homeGround, settings, generated, fileName };
   if (sourceKmzBase64) out.sourceKmzBase64 = sourceKmzBase64;
   return JSON.stringify(out);
 }
@@ -85,13 +91,20 @@ export function projectFromJson(text) {
   };
   const polygon = list(d.polygon, 'survey area');
   const waypoints = list(d.waypoints, 'waypoints');
+  // Extra areas and keep-out zones (absent in older files).
+  const polys = (v, label) => {
+    if (v == null) return [];
+    if (!Array.isArray(v)) throw new Error(`Project ${label} should be a list.`);
+    return v.map((p, i) => list(p, `${label} ${i + 1}`));
+  };
+  const areas = polys(d.areas, 'extra areas'), keepouts = polys(d.keepouts, 'keep-out zones');
   if (d.home != null && !isLL(d.home)) throw new Error('Project home position is not valid.');
   if (d.homeGround != null && !Number.isFinite(d.homeGround)) throw new Error('Project home ground height is not valid.');
   if (d.settings != null && (typeof d.settings !== 'object' || Array.isArray(d.settings))) throw new Error('Project settings are not valid.');
   if (d.sourceKmzBase64 != null && typeof d.sourceKmzBase64 !== 'string') throw new Error('Project source KMZ data is not valid.');
   const out = {
     app: 'gridfly', version: 1, savedAt: typeof d.savedAt === 'string' ? d.savedAt : null,
-    polygon, waypoints, home: d.home ?? null, homeGround: d.homeGround ?? null,
+    polygon, areas, keepouts, waypoints, home: d.home ?? null, homeGround: d.homeGround ?? null,
     settings: d.settings ?? {}, generated: d.generated ?? null,
     fileName: typeof d.fileName === 'string' ? d.fileName : null,
   };

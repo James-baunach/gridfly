@@ -1,9 +1,9 @@
 /* global L */
 // The Leaflet map: layers, rendering of area / route / waypoints, and the drawing tools.
 
-import { haversine, convexHull } from './geo.js';
+import { haversine, convexHull, centroid } from './geo.js';
 import { circlePolygon, rectPolygon } from './presets.js';
-import { $, state, on, emit, toast, ll, setLen, esc } from './state.js';
+import { $, state, on, emit, toast, ll, setLen, esc, areaList } from './state.js';
 import { computeMissions, pushUndo, settings } from './plan.js';
 import { TILE_LAYERS, MAX_NATIVE_ZOOM } from './offline.js';
 import * as store from './store.js';
@@ -57,15 +57,33 @@ const MODE_TEXT = {
   home: 'Click the map where you will stand and take off',
 };
 let anchor = null, drag = null, suppressClick = false;
+// What the shape tools (polygon / rectangle / circle) are drawing: the main area, another area or a keep-out zone.
+let drawFor = 'main';
+const SHAPE_MODES = ['draw', 'rect', 'circle'];
+const FOR_TEXT = { area: 'the new area', keepout: 'the keep-out zone' };
+const modeText = mode => {
+  if (drawFor === 'main' || !SHAPE_MODES.includes(mode)) return MODE_TEXT[mode];
+  const t = FOR_TEXT[drawFor];
+  return { draw: `Click the map to add corners of ${t}`, rect: `Drag a rectangle for ${t}, or click two opposite corners`, circle: `Drag from the centre outwards for ${t}, or click the centre then the edge` }[mode];
+};
+
+// Extra areas and keep-outs that were started but never got three corners.
+function pruneShapes() {
+  state.areas = state.areas.filter(a => a.length >= 3);
+  state.keepouts = state.keepouts.filter(a => a.length >= 3);
+}
 
 function clearPreview() { layers.preview.clearLayers(); }
 
 export function setMode(mode) {
+  if (state.mode === 'draw') pruneShapes();
   state.mode = state.mode === mode ? null : mode;
+  if (!SHAPE_MODES.includes(state.mode)) drawFor = 'main';
+  syncShapePick();
   anchor = drag = null;
   clearPreview();
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === state.mode));
-  const banner = $('modeBanner'), text = MODE_TEXT[state.mode];
+  const banner = $('modeBanner'), text = modeText(state.mode);
   banner.hidden = !text;
   if (text) {
     banner.innerHTML = `${esc(text)}<button id="btnModeDone">${state.mode === 'draw' || state.mode === 'line' ? 'Done' : 'Cancel'}</button>`;
@@ -83,9 +101,17 @@ function setGoalFor(tool) {
   if (want !== state.goal) { state.goal = want; emit('goal'); }
 }
 
-export function startTool(tool) {
-  if (state.mode === tool) return setMode(null);
-  if (tool === 'draw') { setGoalFor('draw'); pushUndo(); state.polygon = []; }
+export function startTool(tool, target = 'main') {
+  if (target === 'area' && state.polygon.length < 3) target = 'main'; // nothing to add to yet
+  if (state.mode === tool && drawFor === target) return setMode(null);
+  if (state.mode === tool) setMode(null); // same tool for another purpose: restart it
+  drawFor = SHAPE_MODES.includes(tool) ? target : 'main';
+  if (tool === 'draw') {
+    setGoalFor('draw'); pushUndo();
+    if (drawFor === 'area') state.areas.push([]);
+    else if (drawFor === 'keepout') state.keepouts.push([]);
+    else state.polygon = [];
+  }
   else if (tool === 'line') { setGoalFor('line'); pushUndo(); state.line = []; }
   else if (tool === 'center') setGoalFor('center');
   else if (tool === 'rect' || tool === 'circle') { if (!(tool === 'circle' && state.goal === 'orbit')) setGoalFor(tool); }
@@ -106,9 +132,12 @@ function finishShape(a, b) {
   clearPreview();
   if (r < 2) { anchor = null; return; }
   pushUndo();
-  if (state.mode === 'rect') state.polygon = rectPolygon(a, b);
+  const poly = state.mode === 'rect' ? rectPolygon(a, b) : circlePolygon(a, r);
+  if (drawFor === 'area') state.areas.push(poly);
+  else if (drawFor === 'keepout') state.keepouts.push(poly);
+  else if (state.mode === 'rect') state.polygon = poly;
   else if (state.goal === 'orbit') { state.center = a; setLen('orbitRadius', Math.min(200, Math.max(10, r))); }
-  else state.polygon = circlePolygon(a, r);
+  else state.polygon = poly;
   setMode(null);
   emit('render');
   emit('plan', { geometry: true });
@@ -118,22 +147,81 @@ function finishShape(a, b) {
 
 const editable = () => state.mode === 'draw' || state.mode === 'line' || !state.waypoints.length || state.generated;
 
-function vertexMarkers(list, onChange) {
+// Corner handles for one shape. Drag to move; tap or click for a "Remove this corner" button (so touch screens
+// need no right-click); right-click also removes. `shape` is the Leaflet layer that follows the drag.
+function vertexMarkers(list, onChange, shape, { min = 3, cls = '' } = {}) {
+  const popups = state.mode !== 'draw' && state.mode !== 'line';
   list.forEach((p, i) => {
-    const m = L.marker(ll(p), { icon: icon('vertex-icon', COARSE ? 22 : 12), draggable: true, zIndexOffset: 500 }).addTo(layers.area);
+    const m = L.marker(ll(p), { icon: L.divIcon({ className: '', html: `<div class="vertex-icon ${cls}" style="width:${COARSE ? 22 : 12}px;height:${COARSE ? 22 : 12}px"></div>`, iconSize: [COARSE ? 22 : 12, COARSE ? 22 : 12] }), draggable: true, zIndexOffset: 500 }).addTo(layers.area);
     m.on('dragstart', pushUndo);
-    m.on('drag', e => { list[i] = { lat: e.latlng.lat, lon: e.latlng.lng }; layers.area.eachLayer(l => l.setLatLngs?.(list.map(ll))); });
+    m.on('drag', e => { list[i] = { lat: e.latlng.lat, lon: e.latlng.lng }; shape?.setLatLngs?.(list.map(ll)); });
     m.on('dragend', () => { emit('render'); onChange(); });
     m.on('contextmenu', () => { pushUndo(); list.splice(i, 1); emit('render'); onChange(); });
+    if (popups) {
+      const box = document.createElement('div');
+      if (list.length <= min) box.textContent = `A shape needs at least ${min} corners.`;
+      else {
+        const b = document.createElement('button');
+        b.textContent = 'Remove this corner';
+        b.onclick = () => { m.closePopup(); pushUndo(); list.splice(i, 1); emit('render'); onChange(); };
+        box.append(b);
+      }
+      m.bindPopup(box, { closeButton: false });
+    }
   });
 }
+
+// ---------- Removing whole shapes ----------
+
+function removeShape(kind, i) {
+  pushUndo();
+  if (kind === 'keepout') state.keepouts.splice(i, 1);
+  else if (i === 0) state.polygon = state.areas.length ? state.areas.shift() : [];
+  else state.areas.splice(i - 1, 1);
+  if (!areaList().length && state.generated && state.goal !== 'orbit' && state.goal !== 'corridor') {
+    state.waypoints = []; state.plan = null; state.generated = false;
+  }
+  emit('render');
+  emit('plan', { geometry: true });
+}
+
+function shapeTag(poly, text, cls, kind, i) {
+  const c = centroid(poly);
+  L.marker([c.lat, c.lon], {
+    icon: L.divIcon({ className: '', html: `<div class="shape-tag ${cls}" title="Tap to remove">${esc(text)} ✕</div>`, iconSize: [0, 0] }),
+    zIndexOffset: 700, title: `Remove ${text}`,
+  }).on('click', () => removeShape(kind, i)).addTo(layers.area);
+}
+
+// The Polygon / Rectangle / Circle chooser shown after "Add another area" or "Add keep-out zone".
+let pickFor = null;
+function syncShapePick() {
+  if (SHAPE_MODES.includes(state.mode)) pickFor = drawFor === 'main' ? null : drawFor;
+  else if (state.mode) pickFor = null; // another tool took over; with no tool the chooser stays as it is
+  const box = $('shapePick');
+  if (!box) return;
+  box.hidden = !pickFor;
+  $('shapePickText').textContent = pickFor === 'keepout' ? 'Draw the keep-out zone as:' : 'Draw the new area as:';
+  box.querySelectorAll('[data-add-shape]').forEach(b => b.classList.toggle('active', state.mode === b.dataset.addShape && drawFor === pickFor));
+  $('btnAddArea')?.classList.toggle('active', pickFor === 'area');
+  $('btnAddKeepout')?.classList.toggle('active', pickFor === 'keepout');
+}
+
+export function initShapePick() {
+  const open = kind => { pickFor = pickFor === kind ? null : kind; if (!pickFor && drawFor !== 'main') setMode(null); syncShapePick(); };
+  $('btnAddArea').onclick = () => open('area');
+  $('btnAddKeepout').onclick = () => open('keepout');
+  $('shapePick').querySelectorAll('[data-add-shape]').forEach(b => b.onclick = () => startTool(b.dataset.addShape, pickFor));
+}
+
+const KEEPOUT_STYLE = { color: '#ff3b30', weight: 2, dashArray: '7 6', fillColor: '#ff3b30', fillOpacity: 0.28, interactive: false };
 
 export function renderArea() {
   layers.area.clearLayers();
   const style = { color: '#ff9f1c', weight: 2, fillOpacity: 0.08, interactive: false };
-  const poly = state.polygon;
-  if (poly.length >= 2) L.polygon(poly.map(ll), style).addTo(layers.area);
-  if (state.line.length >= 2) L.polyline(state.line.map(ll), { ...style, color: '#4cc9f0', weight: 4 }).addTo(layers.area);
+  const shapes = [state.polygon, ...state.areas].map(p => ({ poly: p, layer: p.length >= 2 ? L.polygon(p.map(ll), style).addTo(layers.area) : null }));
+  const holes = state.keepouts.map(p => ({ poly: p, layer: p.length >= 2 ? L.polygon(p.map(ll), KEEPOUT_STYLE).addTo(layers.area) : null }));
+  const lineLayer = state.line.length >= 2 ? L.polyline(state.line.map(ll), { ...style, color: '#4cc9f0', weight: 4 }).addTo(layers.area) : null;
   if (state.center) {
     const r = settings().orbitRadius;
     L.circle(ll(state.center), { ...style, radius: r, fillOpacity: 0.04 }).addTo(layers.area);
@@ -147,9 +235,11 @@ export function renderArea() {
   }
   if (!editable()) return;
   const changed = () => emit('plan', { geometry: true });
-  vertexMarkers(poly, changed);
-  vertexMarkers(state.line, changed);
-  if (poly.length >= 3) {
+  shapes.forEach(sh => vertexMarkers(sh.poly, changed, sh.layer));
+  holes.forEach(sh => vertexMarkers(sh.poly, changed, sh.layer, { cls: 'keepout' }));
+  vertexMarkers(state.line, changed, lineLayer, { min: 2 });
+  for (const { poly } of [...shapes, ...holes]) {
+    if (poly.length < 3) continue;
     poly.forEach((p, i) => {
       const q = poly[(i + 1) % poly.length];
       const mid = { lat: (p.lat + q.lat) / 2, lon: (p.lon + q.lon) / 2 };
@@ -157,6 +247,12 @@ export function renderArea() {
         .on('click', () => { pushUndo(); poly.splice(i + 1, 0, mid); emit('render'); changed(); })
         .addTo(layers.area);
     });
+  }
+  // A label on every shape (when there is more than one) to remove it. Not while a tool is waiting for clicks.
+  if (!state.mode || state.mode === 'add') {
+    const many = shapes.filter(sh => sh.poly.length >= 3).length > 1;
+    shapes.forEach((sh, i) => { if (many && sh.poly.length >= 3) shapeTag(sh.poly, `Area ${i + 1}`, '', 'area', i); });
+    holes.forEach((sh, i) => { if (sh.poly.length >= 3) shapeTag(sh.poly, 'Keep-out', 'keepout', 'keepout', i); });
   }
 }
 
@@ -295,7 +391,7 @@ export function initMapEvents() {
     const p = pt(e);
     const mode = state.mode;
     if (mode === 'draw') {
-      pushUndo(); state.polygon.push(p); emit('render'); emit('plan', { geometry: true });
+      pushUndo(); (drawFor === 'area' ? state.areas.at(-1) : drawFor === 'keepout' ? state.keepouts.at(-1) : state.polygon).push(p); emit('render'); emit('plan', { geometry: true });
     } else if (mode === 'line') {
       pushUndo(); state.line.push(p); emit('render'); emit('plan', { geometry: true });
     } else if (mode === 'center') {

@@ -277,3 +277,9 @@ button.tip {
   body.mapbig #panel { height: 28%; }
   body.mapbig #btnMapSize { top: calc(72% - 54px + env(safe-area-inset-top)); }
 }
+
+.keepout-btn { border-color: #ff3b30; color: #ff6b61; }
+.shape-tag { background: rgba(20,20,20,.85); color: #fff; border: 1px solid #ff9f1c; border-radius: 12px; padding: 4px 10px; font: 600 12px/16px system-ui; white-space: nowrap; cursor: pointer; transform: translate(-50%, -50%); min-height: 24px; }
+.shape-tag.keepout { border-color: #ff3b30; }
+.vertex-icon.keepout { border-color: #ff3b30; }
+#shapePick { align-items: center; }
