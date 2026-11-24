@@ -104,33 +104,39 @@ function makeWp(p, o) {
   };
   if (o.heading !== undefined) wp.heading = o.heading;
   if (p.transit) wp.transit = true;
+  if (p.corner) wp.corner = true;
   return wp;
 }
 
 // ---------- Survey grid ----------
 
+const normHeading = a => ((a % 360) + 360) % 360;
+
 /**
  * Lawnmower survey over a polygon.
  * @param opts {cam, alt, front, side, angle, overshoot, home, speed, gimbal, margin, crosshatch, keepouts (polygons to fly round),
- *              captureMode: 'waypoint' (photo at every point) | 'timer' (DJI Fly Timed Shot)}
+ *              captureMode: 'waypoint' (photo at every point) | 'timer' (DJI Fly Timed Shot),
+ *              clip: range-zone tile to cut the lines to (or null),
+ *              lockHeading: keep the drone facing one way so it never yaws at the end of a line}
  * @returns {waypoints, metrics, interval (s, timer mode only, else null), speed (m/s used), lines}
+ *          Waypoints where the path changes direction carry `corner: true` (the export makes the drone stop there).
  */
 export function planGrid(polygon, opts) {
   const {
     cam, alt, front, side, angle = 0, overshoot = 0, home = null, speed = 5, gimbal = -90,
-    margin = 0, crosshatch = false, captureMode = 'waypoint',
+    margin = 0, crosshatch = false, captureMode = 'waypoint', clip = null, lockHeading = false,
   } = opts;
   const kos = inflateKeepouts(opts.keepouts);
   const area = margin ? bufferPolygon(polygon, margin) : polygon;
   const metrics = gridMetrics(cam, alt, front, side);
-  const gen = { lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot, keepouts: kos };
+  const gen = { lineSpacing: metrics.lineSpacing, photoSpacing: metrics.photoSpacing, overshoot, keepouts: kos, clip };
 
-  let pts = generateGrid(area, { ...gen, angle, home });
+  let pts = generateGrid(area, { ...gen, angle, home }).map(p => ({ ...p, pass: 0 }));
   if (crosshatch && pts.length) {
     const last = pts.at(-1);
     const second = generateGrid(area, { ...gen, angle: angle + 90, home: last })
-      .map(p => ({ ...p, line: p.line + last.line + 1, seg: p.seg < 0 ? p.seg : p.seg + last.seg + 1 }));
-    if (second.length) pts = pts.concat(transitPoints(last, second[0], kos).map(p => ({ ...p, line: last.line + 1, seg: -1, transit: true })), second);
+      .map(p => ({ ...p, pass: 1, line: p.line + last.line + 1, seg: p.seg < 0 ? p.seg : p.seg + last.seg + 1 }));
+    if (second.length) pts = pts.concat(transitPoints(last, second[0], kos).map(p => ({ ...p, pass: 1, line: last.line + 1, seg: -1, transit: true })), second);
   }
 
   const timer = captureMode === 'timer';
@@ -142,7 +148,10 @@ export function planGrid(polygon, opts) {
     pts = pts.filter((p, i) => p.transit || pts[i - 1]?.seg !== p.seg || pts[i + 1]?.seg !== p.seg);
   }
 
-  const waypoints = pts.map(p => makeWp(p, { height: alt, speed: flySpeed, photo: !timer, pitch: gimbal }));
+  // Line ends and detours are corners: the drone stops there instead of rounding the turn.
+  pts = pts.map((p, i) => (p.transit || pts[i - 1]?.seg !== p.seg || pts[i + 1]?.seg !== p.seg) ? { ...p, corner: true } : p);
+  const heading = p => lockHeading ? normHeading(angle + 90 * p.pass) : undefined;
+  const waypoints = pts.map(p => makeWp(p, { height: alt, speed: flySpeed, photo: !timer, pitch: gimbal, heading: heading(p) }));
   return { waypoints, metrics, interval, speed: flySpeed, lines: pts.length ? pts.at(-1).line + 1 : 0 };
 }
 

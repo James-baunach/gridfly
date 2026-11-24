@@ -19,11 +19,13 @@ test('units convert both ways and format', () => {
 });
 
 test('quality presets map to altitude and overlap per goal', () => {
-  assert.deepEqual(qualityParams('grid', 1), { alt: 70, front: 75, side: 65 });
-  assert.deepEqual(qualityParams('3d', 1), { alt: 70, front: 80, side: 70 });
-  assert.deepEqual(qualityParams('grid', 0), { alt: 90, front: 70, side: 60 });
-  assert.deepEqual(qualityParams('grid', 2), { alt: 50, front: 80, side: 70 });
-  assert.equal(qualityMatch('grid', 70, 75, 65), 1);
+  assert.deepEqual(qualityParams('grid', 4), { alt: 70, front: 75, side: 65 });
+  assert.deepEqual(qualityParams('3d', 4), { alt: 70, front: 80, side: 70 });
+  assert.deepEqual(qualityParams('grid', 0), { alt: 120, front: 70, side: 60 });
+  assert.deepEqual(qualityParams('grid', 7), { alt: 35, front: 80, side: 70 });
+  assert.deepEqual(qualityParams('grid', 0, true), { alt: 120, front: 75, side: 65 });
+  assert.equal(qualityMatch('grid', 70, 75, 65), 4);
+  assert.equal(qualityMatch('grid', 120, 75, 65, true), 0);
   assert.equal(qualityMatch('grid', 71, 75, 65), -1);
   assert.equal(GOALS['3d'].crosshatch, true);
   assert.match(detailWords(2, 'm'), /2\.0 cm/);

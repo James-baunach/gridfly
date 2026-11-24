@@ -74,7 +74,7 @@ function missionRows(missions, withSelect) {
       : m.resumedFrom ? ` <span class="pill ok">Rest from point ${m.resumedFrom + 1}</span>` : '';
     return `<div class="mission-row${m.flown ? ' flown' : ''}">
       <span class="swatch" style="background:${m.color}"></span>
-      <span class="name">Mission ${m.index + 1}${status}<br><span class="muted small">${m.resumedFrom ? `points ${m.resumedFrom + 1}–${m.fullCount} of ${m.fullCount}` : `${m.points.length} points`} · ${fmtTime(m.time)}</span></span>
+      <span class="name">Mission ${m.index + 1}${Number.isInteger(m.zone) ? ` <span class="small">from L${m.zone + 1}</span>` : ''}${status}<br><span class="muted small">${m.resumedFrom ? `points ${m.resumedFrom + 1}–${m.fullCount} of ${m.fullCount}` : `${m.points.length} points`} · ${fmtTime(m.time)}</span></span>
       ${withSelect && state.controllers.length ? `<select data-target="${m.index}" aria-label="Where to install mission ${m.index + 1}">${opts}</select>` : ''}
       <button data-dl="${m.index}" title="Download this mission as a KMZ file">KMZ</button>
       <div class="mission-progress">

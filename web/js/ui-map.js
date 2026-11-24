@@ -271,14 +271,18 @@ export function renderWaypoints() {
   const wps = state.waypoints;
   const missions = computeMissions();
 
-  if (state.home && wps.length) {
+  const launches = state.launches?.length ? state.launches : null;
+  if (launches) {
+    // Each mission starts with a dashed leg from its own launch point.
+    for (const m of missions) if (m.launch && m.points.length) L.polyline([ll(m.launch), ll(m.points[0])], { color: '#12b76a', weight: 2, dashArray: '6 6', renderer, interactive: false }).addTo(layers.route);
+  } else if (state.home && wps.length) {
     L.polyline([ll(state.home), ll(wps[0])], { color: '#12b76a', weight: 2, dashArray: '6 6', renderer, interactive: false }).addTo(layers.route);
   }
   missions.forEach((m, k) => {
     // Flown missions and the already-flown part of a resumed one are drawn faint.
     if (m.resumedFrom) L.polyline(wps.slice(m.fullStart, m.start + 1).map(ll), { color: m.color, weight: 3, opacity: 0.3, dashArray: '2 6', renderer, interactive: false }).addTo(layers.route);
     L.polyline(m.points.map(ll), { color: m.color, weight: 3, opacity: m.flown ? 0.3 : 0.95, renderer, interactive: false }).addTo(layers.route);
-    if (k > 0) L.polyline([ll(wps[m.start - 1]), ll(wps[m.start])], { color: '#ffffff', weight: 1.5, dashArray: '3 6', renderer, interactive: false }).addTo(layers.route);
+    if (k > 0 && missions[k - 1].zone === m.zone) L.polyline([ll(wps[m.start - 1]), ll(wps[m.start])], { color: '#ffffff', weight: 1.5, dashArray: '3 6', renderer, interactive: false }).addTo(layers.route);
   });
 
   const missionOf = i => missions.find(m => i >= m.fullStart && i <= m.end);
@@ -312,7 +316,21 @@ export function renderWaypoints() {
 
   if (state.userLoc) L.circleMarker(ll(state.userLoc), { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6feb', fillOpacity: 1, interactive: false }).addTo(layers.top);
 
-  if (state.home) {
+  if (launches) {
+    launches.forEach((p, k) => {
+      const ms = missions.filter(m => m.zone === k).map(m => m.index + 1);
+      const title = `Launch point L${k + 1}: take off here for mission${ms.length > 1 ? 's' : ''} ${ms.join(', ')} (drag to a spot you can reach)`;
+      const h = L.marker(ll(p), { icon: icon('home-icon', COARSE ? 30 : 24, `L${k + 1}`), draggable: true, zIndexOffset: 900, title }).addTo(layers.top);
+      h.on('dragstart', pushUndo);
+      h.on('dragend', e => {
+        const q = e.target.getLatLng();
+        state.launches[k] = { lat: q.lat, lon: q.lng, user: true, ground: null };
+        if (wps.some(w => w.ground !== undefined)) state.terrainStale = true;
+        emit('render');
+        emit('plan', { home: true });
+      });
+    });
+  } else if (state.home) {
     const h = L.marker(ll(state.home), { icon: icon('home-icon', COARSE ? 30 : 22, 'H'), draggable: true, zIndexOffset: 900, title: 'Where you take off (drag to move)' }).addTo(layers.top);
     h.on('dragstart', pushUndo);
     h.on('dragend', e => {

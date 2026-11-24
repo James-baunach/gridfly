@@ -32,6 +32,8 @@ function renderInfo() {
   $('customCam').hidden = $('camera').value !== 'custom';
   $('margin').disabled = s.marginAuto;
   if (s.marginAuto) setLen('margin', autoMargin(g));
+  $('speed').disabled = s.speedAuto;
+  if (s.speedAuto) setSpeed('speed', s.speed);
   $('hover').disabled = state.plan?.captureMode === 'timer';
   $('hover').title = $('hover').disabled ? 'Not needed in timer mode: the camera takes photos on its own timer.' : '';
 
@@ -42,7 +44,10 @@ function renderInfo() {
     : state.waypoints.length ? 'New mission (not based on a DJI Fly file).'
       : 'Open a mission saved by DJI Fly, drop a file on the map, or draw an area.';
 
-  $('homeInfo').textContent = state.home
+  const nl = state.launches?.length;
+  $('homeInfo').textContent = nl
+    ? `${nl} launch points (L1 to L${nl} on the map), one per zone so the drone stays within ${fmtLen(s.maxRange)} of you. Each mission's file name ends in the launch point to fly it from. Drag a launch point to a spot you can actually reach (a road, a clearing); heights are measured from there.`
+    : state.home
     ? `Takeoff (green H): ${state.home.lat.toFixed(6)}, ${state.home.lon.toFixed(6)}` + (state.homeGround !== null ? ` · ground ${fmtLen(state.homeGround)} above sea level` : '') +
       '. Drag the H to where you will actually stand. Heights are measured from there.'
     : 'No takeoff point yet. It is chosen for you when the plan is made.';
@@ -58,9 +63,11 @@ function keepoutWarnings(wps, missions) {
   if (!ko.length) return [];
   const out = [];
   if (pathHitsKeepouts(wps, ko)) out.push('Part of the flight path crosses a keep-out zone (waypoints were edited or moved after planning). Re-plan, or move those waypoints.');
-  if (state.home) {
-    if (pointInKeepouts(state.home, ko)) out.push('Your takeoff point (H) is inside a keep-out zone. Move the H marker.');
-    if (missions.some(m => m.points.length && (pathHitsKeepouts([state.home, m.points[0]], ko) || pathHitsKeepouts([m.points.at(-1), state.home], ko)))) {
+  const starts = state.launches?.length ? state.launches : state.home ? [state.home] : [];
+  if (starts.length) {
+    if (starts.some(h => pointInKeepouts(h, ko))) out.push(state.launches ? 'A launch point is inside a keep-out zone. Drag it out.' : 'Your takeoff point (H) is inside a keep-out zone. Move the H marker.');
+    const from = m => m.launch || state.home;
+    if (missions.some(m => m.points.length && from(m) && (pathHitsKeepouts([from(m), m.points[0]], ko) || pathHitsKeepouts([m.points.at(-1), from(m)], ko)))) {
       out.push('The straight line between the takeoff point and the first (or last) waypoint of a mission crosses a keep-out zone. GridFly does not plan the takeoff and return legs (Return to Home flies straight back), so fly them yourself or move the H marker.');
     }
   }
@@ -105,7 +112,12 @@ function renderStats() {
     }
     if (r.warnLoaded) warn.push('This file uses curved paths, and DJI Fly ignores photo actions on curved paths. GridFly switches to straight paths as soon as you edit anything.');
     else if (s.turnMode === 'curved') warn.push('Curved paths cut corners between points and can bend flight lines. Use a straight path style for mapping.');
-    if (missions.length > 1) warn.push(`Split into ${missions.length} missions (max ${s.maxWp} waypoints${s.maxMin ? ` / ${s.maxMin} min` : ''} each). Fly them in order from the same takeoff point, one battery each.`);
+    const tooFar = missions.filter(m => m.far > s.maxRange * 1.02);
+    if (tooFar.length) warn.push(`${tooFar.length === 1 ? `Mission ${tooFar[0].index + 1} goes` : `Missions ${tooFar.map(m => m.index + 1).join(', ')} go`} up to ${fmtLen(Math.max(...tooFar.map(m => m.far)))} from ${state.launches ? 'its launch point' : 'the takeoff point'}, beyond your ${fmtLen(s.maxRange)} signal range.` +
+      (s.rangeSplit ? ' Move the takeoff or launch point closer, or re-plan.' : ' Turn on "Split big areas by signal range" to get launch points.'));
+    if (missions.length > 1) warn.push(state.launches
+      ? `Split into ${missions.length} missions flown from ${state.launches.length} launch points (max ${s.maxWp} waypoints${s.maxMin ? ` / ${s.maxMin} min` : ''} each). Each file name ends in its launch point (L1, L2…): take off from that spot, one battery per mission.`
+      : `Split into ${missions.length} missions (max ${s.maxWp} waypoints${s.maxMin ? ` / ${s.maxMin} min` : ''} each). Fly them in order from the same takeoff point, one battery each.`);
     if (!state.source && !HELPER_CONTROLLERS.includes(s.controller)) warn.push('Not based on a DJI Fly file, so GridFly uses built-in drone settings. If DJI Fly refuses the mission, open a KMZ saved by your drone first.');
     if (state.source?.info.heightMode && state.source.info.heightMode !== 'relativeToStartPoint') warn.push(`This file uses "${state.source.info.heightMode}" heights; GridFly treats heights as relative to takeoff.`);
   }
@@ -123,7 +135,7 @@ function renderProfile() {
   ctx.clearRect(0, 0, W, H);
   const xs = [0];
   for (let i = 1; i < wps.length; i++) xs.push(xs[i - 1] + haversine(wps[i - 1], wps[i]));
-  const gr = wps.map(w => w.ground !== undefined ? w.ground - state.homeGround : null);
+  const gr = wps.map(w => w.ground !== undefined ? w.ground - (w.launchGround ?? state.homeGround) : null);
   const cp = state.clearance?.count === wps.length ? state.clearance.profile : null;
   const all = [...wps.map(w => w.height), ...gr.filter(v => v !== null), ...(cp ? cp.map(p => p.surface) : []), 0];
   const lo = Math.min(...all) - 5, hi = Math.max(...all) + 5;
@@ -165,7 +177,7 @@ function renderSelection() {
   if (document.activeElement !== $('selSpeed')) setSpeed('selSpeed', w.speed);
   $('selPhoto').checked = !!w.photo;
   $('selInfo').textContent = `${w.lat.toFixed(7)}, ${w.lon.toFixed(7)}` +
-    (w.ground !== undefined && state.homeGround !== null ? ` · ${fmtLen(w.height - (w.ground - state.homeGround))} above ground` : '') +
+    (w.ground !== undefined && state.homeGround !== null ? ` · ${fmtLen(w.height - (w.ground - (w.launchGround ?? state.homeGround)))} above ground` : '') +
     (w.terrainPoint ? ' · added for terrain' : '');
 }
 
@@ -201,7 +213,7 @@ function bind() {
   $('btnClearArea').onclick = () => {
     pushUndo();
     state.polygon = []; state.areas = []; state.keepouts = []; state.center = null; state.line = [];
-    if (state.generated) { state.waypoints = []; state.plan = null; state.generated = false; state.home = state.homeUser ? state.home : null; }
+    if (state.generated) { state.waypoints = []; state.plan = null; state.generated = false; state.home = state.homeUser ? state.home : null; state.launches = null; }
     emit('render');
     emit('plan', { geometry: true });
   };

@@ -19,7 +19,7 @@ function projectObject(withKmz) {
     polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, waypoints: state.waypoints, home: state.home, homeGround: state.homeGround, fileName: state.fileName,
     settings: { ...settingsSnapshot(), _ui: { easy: state.easy, step: state.step, unit: state.unit } },
     generated: {
-      generated: state.generated, plan: state.plan, center: state.center, line: state.line, homeUser: state.homeUser, homeKey: state.homeKey,
+      generated: state.generated, plan: state.plan, center: state.center, line: state.line, homeUser: state.homeUser, homeKey: state.homeKey, launches: state.launches,
       terrainStale: state.terrainStale, pristine: state.pristine, progress: state.progress, projectName: state.projectName,
     },
   };
@@ -80,6 +80,7 @@ async function applyProject(p, { id = null, name = null } = {}) {
   Object.assign(state, {
     polygon: p.polygon, areas: (p.areas || []).filter(a => a.length >= 3), keepouts: (p.keepouts || []).filter(a => a.length >= 3), waypoints: p.waypoints, home: p.home, homeGround: p.homeGround, fileName: p.fileName,
     generated: !!g.generated, plan: g.plan ?? null, center: g.center ?? null, line: g.line ?? [], homeUser: !!g.homeUser, homeKey: g.homeKey ?? null,
+    launches: Array.isArray(g.launches) && g.launches.length && g.launches.every(l => Number.isFinite(l?.lat) && Number.isFinite(l?.lon)) ? g.launches : null,
     terrainStale: !!g.terrainStale, pristine: !!g.pristine, selected: -1, undo: [], redo: [], source: null, sourceBytes: null,
     progress: g.progress ?? null, projectId: id, projectName: name || g.projectName || null,
   });
@@ -228,8 +229,8 @@ const EXPORTS = {
     const files = await buildMissionFiles();
     download(await microSdPackage(files.map(f => ({ blob: f.blob })), { baseName: (state.fileName || 'gridfly').replace(/\.kmz$/i, '') }), 'GridFly-microSD.zip');
   },
-  expKml: () => download(new Blob([toKml({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: withNames(computeMissions()), home: state.home })], { type: 'application/vnd.google-earth.kml+xml' }), 'gridfly.kml'),
-  expGeo: () => download(new Blob([JSON.stringify(toGeoJSON({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: computeMissions(), home: state.home }))], { type: 'application/geo+json' }), 'gridfly.geojson'),
+  expKml: () => download(new Blob([toKml({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: withNames(computeMissions()), home: state.home, launches: state.launches })], { type: 'application/vnd.google-earth.kml+xml' }), 'gridfly.kml'),
+  expGeo: () => download(new Blob([JSON.stringify(toGeoJSON({ polygon: state.polygon, areas: state.areas, keepouts: state.keepouts, missions: computeMissions(), home: state.home, launches: state.launches }))], { type: 'application/geo+json' }), 'gridfly.geojson'),
 };
 
 function syncExportMenu() {

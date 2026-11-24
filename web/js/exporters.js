@@ -6,7 +6,7 @@ const closed = poly => {
   return ring;
 };
 
-export function toGeoJSON({ polygon = [], areas = [], keepouts = [], missions = [], home = null }) {
+export function toGeoJSON({ polygon = [], areas = [], keepouts = [], missions = [], home = null, launches = null }) {
   const features = [];
   if (polygon.length >= 3) features.push({ type: 'Feature', properties: { kind: 'survey_area' }, geometry: { type: 'Polygon', coordinates: [closed(polygon)] } });
   for (const a of areas) if (a.length >= 3) features.push({ type: 'Feature', properties: { kind: 'survey_area' }, geometry: { type: 'Polygon', coordinates: [closed(a)] } });
@@ -21,7 +21,8 @@ export function toGeoJSON({ polygon = [], areas = [], keepouts = [], missions = 
       if (p.photo) features.push({ type: 'Feature', properties: { kind: 'photo', mission: i + 1, height: p.height }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
     }
   });
-  if (home) features.push({ type: 'Feature', properties: { kind: 'home' }, geometry: { type: 'Point', coordinates: [home.lon, home.lat] } });
+  if (launches?.length) launches.forEach((l, k) => features.push({ type: 'Feature', properties: { kind: 'launch', name: `L${k + 1}` }, geometry: { type: 'Point', coordinates: [l.lon, l.lat] } }));
+  else if (home) features.push({ type: 'Feature', properties: { kind: 'home' }, geometry: { type: 'Point', coordinates: [home.lon, home.lat] } });
   return { type: 'FeatureCollection', features };
 }
 
@@ -30,7 +31,7 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 const LINE_COLORS = ['ff0080ff', 'ffff8000', 'ff00c800', 'ffc800c8', 'ff0000ff', 'ff00c8c8', 'ffc8c800', 'ff808080'];
 const coords = pts => pts.map(p => `${p.lon},${p.lat},0`).join(' ');
 
-export function toKml({ polygon = [], areas = [], keepouts = [], missions = [], home = null, name = 'GridFly mission' }) {
+export function toKml({ polygon = [], areas = [], keepouts = [], missions = [], home = null, launches = null, name = 'GridFly mission' }) {
   const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2">', '<Document>', `<name>${esc(name)}</name>`];
   out.push('<Style id="area"><LineStyle><color>ff0080ff</color><width>3</width></LineStyle><PolyStyle><color>4d0080ff</color></PolyStyle></Style>');
   LINE_COLORS.forEach((c, i) => out.push(`<Style id="m${i}"><LineStyle><color>${c}</color><width>3</width></LineStyle></Style>`));
@@ -46,7 +47,8 @@ export function toKml({ polygon = [], areas = [], keepouts = [], missions = [], 
     const label = m.name || `Mission ${i + 1}`;
     out.push(`<Placemark><name>${esc(label)}</name><description>${m.points.length} waypoints, ${Math.round(m.distance || 0)} m, ${Math.round(m.time || 0)} s</description><styleUrl>#m${i % LINE_COLORS.length}</styleUrl><LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>${coords(m.points)}</coordinates></LineString></Placemark>`);
   });
-  if (home) out.push(`<Placemark><name>Home</name><Point><coordinates>${home.lon},${home.lat},0</coordinates></Point></Placemark>`);
+  if (launches?.length) launches.forEach((l, k) => out.push(`<Placemark><name>Launch L${k + 1}</name><Point><coordinates>${l.lon},${l.lat},0</coordinates></Point></Placemark>`));
+  else if (home) out.push(`<Placemark><name>Home</name><Point><coordinates>${home.lon},${home.lat},0</coordinates></Point></Placemark>`);
   out.push('</Document>', '</kml>');
   return out.join('\n');
 }

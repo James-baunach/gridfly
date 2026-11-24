@@ -23,7 +23,9 @@ export function buildChecklist(ctx) {
   const heights = pts.map(p => p.height);
   const maxH = heights.length ? Math.max(...heights) : 0;
   const minH = heights.length ? Math.min(...heights) : 0;
-  const far = home ? Math.max(0, ...pts.map(p => haversine(home, p))) : 0;
+  // Distance from where each mission takes off (its own launch point when the area is split into zones).
+  const far = Math.max(0, ...missions.flatMap(m => { const h = m.launch || home; return h ? (m.points || []).map(p => haversine(h, p)) : []; }));
+  const launchCount = new Set(missions.map(m => m.zone).filter(z => Number.isInteger(z))).size;
   const n = missions.length;
   const batteries = n + 1;
   const sdGb = photoCount * MB_PER_PHOTO / 1000;
@@ -42,7 +44,7 @@ export function buildChecklist(ctx) {
   if (!n || !pts.length) stops.push(item('There are no missions yet. Plan an area and generate waypoints first.', 'stop'));
   // Legal limits apply above the ground, which terrain following keeps constant, so judge those on
   // ground clearance when elevation is known and on height above takeoff otherwise.
-  const agl = p => p.ground != null && homeGround != null ? p.height - (p.ground - homeGround) : p.height;
+  const agl = p => p.ground != null && (p.launchGround ?? homeGround) != null ? p.height - (p.ground - (p.launchGround ?? homeGround)) : p.height;
   const maxAgl = pts.length ? Math.max(...pts.map(agl)) : 0;
   const minAgl = pts.length ? Math.min(...pts.map(agl)) : 0;
   if (pts.length && maxAgl > 120) stops.push(item(`Your flight reaches ${L(maxAgl)} above the ground, over the ${ft ? '400 ft (120 m)' : '120 m (400 ft)'} limit in many countries.`, 'stop', { detail: 'Check your local rules before flying, or lower the flight height and regenerate.' }));
@@ -83,11 +85,15 @@ export function buildChecklist(ctx) {
   ];
 
   const site = [
-    item('Take off from the planned takeoff (H) point', 'todo', { detail: 'The heights in the mission are measured from where you take off. If you start somewhere else, the drone will be too high or too low everywhere.' }),
+    launchCount > 1
+      ? item(`Take off from the launch point named in each mission (L1 to L${launchCount})`, 'todo', { detail: 'The area is split into zones so the drone stays in signal range. Each mission file name ends in its launch point (for example -L2). The heights are measured from that spot: start somewhere else and the drone will be too high or too low everywhere.' })
+      : item('Take off from the planned takeoff (H) point', 'todo', { detail: 'The heights in the mission are measured from where you take off. If you start somewhere else, the drone will be too high or too low everywhere.' }),
     item('Keep the drone in sight the whole time', 'todo', { detail: 'You are required to keep visual line of sight in most countries. Use a spotter if the area is large.' }),
     item('Look for people, vehicles, trees, wires and anything taller than your flight height', 'todo', { detail: 'Stay clear of people who are not part of the job. Check for power lines in particular.' }),
     item(`Fly the missions in order, 1${n > 1 ? ' to ' + n : ''}`, 'todo'),
-    item('Between batteries, do not move the takeoff point', 'todo', { detail: 'Land at or near the same spot and take off from there again. Fit the fresh battery without turning the controller around or changing the home point.' }),
+    launchCount > 1
+      ? item('Move to the next launch point only when the mission number says so', 'todo', { detail: 'Missions from the same launch point are flown one after another. Land, walk or drive to the next launch point, and let the drone record a fresh home point there before starting.' })
+      : item('Between batteries, do not move the takeoff point', 'todo', { detail: 'Land at or near the same spot and take off from there again. Fit the fresh battery without turning the controller around or changing the home point.' }),
   ];
   if (n > 1) site.push(item(`Your flight uses ${n} batteries; land with at least 25% left when a mission is done`, 'info'));
 

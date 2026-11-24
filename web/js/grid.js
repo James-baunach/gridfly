@@ -54,16 +54,27 @@ export function crossings(xy, x) {
   return out;
 }
 
+// Parts of the intervals `a` that lie inside any interval of `b` (both sorted, non-overlapping).
+export function intersectIntervals(a, b) {
+  const out = [];
+  for (const [a1, a2] of a) for (const [b1, b2] of b) {
+    const lo = Math.max(a1, b1), hi = Math.min(a2, b2);
+    if (hi > lo) out.push([lo, hi]);
+  }
+  return out.sort((p, q) => p[0] - q[0]);
+}
+
 /**
  * Lawnmower pattern over a polygon.
  * @param polygon [{lat, lon}]
  * @param opts {angle: flight bearing in degrees (0 = north-south lines, 90 = east-west),
  *              lineSpacing, photoSpacing, overshoot (m past the boundary), home: {lat, lon} | null,
- *              keepouts: polygons (already enlarged by any clearance) the lines are cut at and the path goes around}
+ *              keepouts: polygons (already enlarged by any clearance) the lines are cut at and the path goes around,
+ *              clip: convex polygon (a range zone tile) the lines are cut to, or null}
  * @returns [{lat, lon, line, seg, transit?}] in flight order; `seg` numbers each straight run (a line crossing a concave
  *          area has several). `transit` points only steer the drone round a keep-out and take no photo.
  */
-export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, overshoot = 0, home = null, keepouts = [] }) {
+export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, overshoot = 0, home = null, keepouts = [], clip = null }) {
   const { proj, xy } = rotatedPolygon(polygon, angle);
   const xs = xy.map(p => p[0]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -73,6 +84,7 @@ export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, oversh
   const eps = Math.min(0.05, width / 1000);
   const kxy = keepouts.filter(k => k.length >= 3).map(k => k.map(p => rotate(proj.toXY(p.lat, p.lon), angle)));
   const route = kxy.length ? makeRouter(kxy) : null;
+  const cxy = clip && clip.length >= 3 ? clip.map(p => rotate(proj.toXY(p.lat, p.lon), angle)) : null;
 
   // One entry per flight line; concave areas can give a line several intervals.
   const lines = [];
@@ -80,6 +92,7 @@ export function generateGrid(polygon, { angle, lineSpacing, photoSpacing, oversh
     const x = nLines > 1 ? Math.min(maxX - eps, Math.max(minX + eps, minX + k * step)) : (minX + maxX) / 2;
     let iv = crossings(xy, x).map(([y1, y2]) => [y1 - overshoot, y2 + overshoot]);
     if (kxy.length) iv = subtractIntervals(iv, kxy.flatMap(k => crossings(k, x))).filter(([y1, y2]) => y2 - y1 >= 1);
+    if (cxy) iv = intersectIntervals(iv, crossings(cxy, x)).filter(([y1, y2]) => y2 - y1 >= 1);
     if (iv.length) lines.push({ x, iv });
   }
   if (!lines.length) return [];

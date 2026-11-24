@@ -151,12 +151,14 @@
   </section>
 
   <section class="step" data-step="4">
-    <h2 data-help="Higher quality means flying lower, which gives finer detail but needs more photos and more batteries.">4 · Quality &amp; flight</h2>
+    <h2 data-help="Slide left for the quickest flight: as high as is usually legal (400 ft) with the fewest photos a map still stitches from. Slide right for finer detail: lower, with more photos and batteries. Speed is set automatically to the fastest that keeps photos sharp.">4 · Quality &amp; flight</h2>
     <div id="qualityBox">
-      <label>Quality: <b id="qualityName"></b>
-        <input id="quality" type="range" min="0" max="2" step="1" value="1" aria-label="Quality">
+      <label>Quality: <b id="qualityName"></b> <span id="qualityInfo" class="muted small"></span>
+        <input id="quality" type="range" min="0" max="7" step="1" value="4" aria-label="Quality" list="qualityTicks">
       </label>
-      <div class="rangeLabels"><span>Fast</span><span>Balanced</span><span>Detailed</span></div>
+      <datalist id="qualityTicks"><option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option><option value="7"></option></datalist>
+      <div class="rangeLabels"><span>Quickest (fewest photos)</span><span>Most detail</span></div>
+      <label class="check" data-help="Trees, crops and long grass move in the wind and look alike from above, so the map software needs more overlap to stitch them. Adds 5% front and side overlap."><input id="trees" type="checkbox"> Lots of trees or crops (more overlap so they stitch cleanly)</label>
       <div class="grid2" id="targetBox">
         <label data-help="Optional. Type how fine you want the detail, as the size one photo pixel covers on the ground. GridFly works out the flying height for your camera and sets it. A smaller number means finer detail and a lower flight.">Detail I need (<span class="u-gsd">cm</span> per pixel)<input id="targetGsd" type="number" data-gsd data-min="0.1" data-max="20" min="0.1" max="20" step="0.1" placeholder="optional" inputmode="decimal"></label>
         <label data-help="Optional. Type how many batteries (missions) you have. GridFly finds the lowest flying height, which gives the finest detail, where your whole area still fits in that many missions.">Batteries I have<input id="targetBatteries" type="number" min="1" max="50" step="1" placeholder="optional" inputmode="numeric"></label>
@@ -164,6 +166,12 @@
       <p id="targetNote" class="muted small" role="status"></p>
     </div>
     <div id="plainResult" class="result"></div>
+
+    <div class="card" id="rangeBox" data-for="grid 3d">
+      <label class="check" data-help="Big areas are cut into zones, each flown from its own launch point (L1, L2… on the map), so the drone never goes farther from you than your controller's reliable signal range. Drag a launch point to a spot you can actually reach; heights are measured from there."><input id="rangeSplit" type="checkbox" checked> Split big areas by signal range, with suggested launch points</label>
+      <label data-help="How far from you the drone can fly and keep a solid signal at your site. Trees and hills cut this a lot; 2000 to 2500 ft is typical for wooded country.">Max distance from launch point (<span class="u-len">m</span>)<input id="maxRange" type="number" data-len data-min="100" data-max="8000" value="609.6"></label>
+      <p id="rangeNote" class="muted small"></p>
+    </div>
 
     <div class="seg" id="dirSeg">
       <button data-dir="auto" title="Direction with the fewest flight lines">Auto</button>
@@ -207,13 +215,15 @@
       </div>
       <div class="grid2">
         <label data-help="How high the drone flies above the ground. Lower = sharper detail but more photos.">Height above ground (<span class="u-len">m</span>)<input id="alt" type="number" data-len data-min="5" data-max="500" value="70"></label>
-        <label data-help="How fast the drone flies. Slower is safer for sharp photos.">Speed (<span class="u-speed">m/s</span>)<input id="speed" type="number" data-speed data-min="1" data-max="15" data-step="0.5" min="1" max="15" step="0.5" value="5"></label>
+        <label data-help="How fast the drone flies. Slower is safer for sharp photos. Turn off Automatic speed below to set it yourself.">Speed (<span class="u-speed">m/s</span>)<input id="speed" type="number" data-speed data-min="1" data-max="15" data-step="0.5" min="1" max="15" step="0.5" value="5"></label>
         <label data-help="How much each photo overlaps the next one along the flight line. 75 to 80 is good for most sites.">Front overlap (%)<input id="front" type="number" min="0" max="95" step="1" value="75"></label>
         <label data-help="How much neighbouring flight lines overlap. 65 to 70 is good for most sites.">Side overlap (%)<input id="side" type="number" min="0" max="95" step="1" value="65"></label>
         <label data-help="Fly this far past the edge of the area on each line.">Overshoot (<span class="u-len">m</span>)<input id="overshoot" type="number" data-len data-min="0" data-max="100" value="0"></label>
         <label data-help="Extra distance added around your area so the edges are covered by enough photos. Automatic uses half the photo width.">Edge margin (<span class="u-len">m</span>)<input id="margin" type="number" data-len data-min="0" data-max="300" value="0"></label>
       </div>
       <label class="check"><input id="marginAuto" type="checkbox" checked> Automatic edge margin</label>
+      <label class="check" data-help="The fastest speed (up to 12 m/s) where photos taken on the move smear by less than half a pixel at 1/1000 s and are at least 2.5 s apart, so the camera keeps up."><input id="speedAuto" type="checkbox" checked> Automatic speed (fastest that stays sharp)</label>
+      <label class="check" data-help="The drone keeps facing the same way for the whole grid and flies the return lines backwards, so it never spins round at the end of a line. Spinning while the camera fires smears photos, and it wastes time."><input id="lockHeading" type="checkbox" checked> Keep facing one way (no spinning at line ends)</label>
       <div class="grid2">
         <label data-help="DJI Fly allows at most about 400 waypoints in one mission; 200 is a safe default.">Max waypoints per mission<input id="maxWp" type="number" min="2" max="400" step="1" value="200"></label>
         <label data-help="Splits the plan into missions that fit one battery. 0 turns the time limit off.">Max minutes per battery (0 = off)<input id="maxMin" type="number" min="0" max="45" step="1" value="25"></label>
@@ -226,8 +236,8 @@
     <h2>Waypoints &amp; actions</h2>
     <label data-help="Straight lines give the cleanest map. Curved paths cut corners, and DJI Fly ignores photo actions on them.">Path style
       <select id="turnMode">
-        <option value="straight-stop">Straight lines, stop at each point (sharpest photos)</option>
-        <option value="straight-pass">Straight lines, fly through points (faster)</option>
+        <option value="straight-pass">Straight lines, fly through points, stop at line ends (fastest)</option>
+        <option value="straight-stop">Straight lines, stop at each point (slowest)</option>
         <option value="curved">Curved (DJI Fly default)</option>
         <option value="keep">Keep what the file has</option>
       </select>

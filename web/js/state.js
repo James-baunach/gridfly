@@ -21,6 +21,7 @@ export const state = {
   homeUser: false,     // the user placed it
   homeKey: null,
   homeGround: null,
+  launches: null,      // big areas split by signal range: [{lat, lon, user?, ground?}], one per zone (waypoint.zone indexes it)
   terrainStale: false,
   pristine: false,     // a loaded file that has not been edited yet
   mode: null,          // map tool: 'draw' | 'rect' | 'circle' | 'line' | 'center' | 'add' | 'home'

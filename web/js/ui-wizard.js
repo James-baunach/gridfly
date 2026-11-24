@@ -6,14 +6,15 @@ import { FT, fmtSmall } from './units.js';
 import { pathLength } from './geo.js';
 import { netAreaM2 } from './avoid.js';
 import { GOALS, QUALITY, qualityParams, qualityMatch, detailWords, CONTROLLERS } from './presets.js';
-import { $, state, areaList, keepoutList, on, emit, toast, esc, debounce, setPref, pref, setLen, getGsd, fmtTime, fmtLen, fmtDist, fmtArea } from './state.js';
+import { $, state, areaList, keepoutList, on, emit, toast, esc, debounce, setPref, pref, setLen, getGsd, fmtTime, fmtLen, fmtDist, fmtArea, fmtSpeed } from './state.js';
 import { settings, saveSettings, generate, applyHeights, computeMissions, missionsForAlt, missingInput, geometryReady, photoEstimate, currentAngle } from './plan.js';
 import { startTool, setMode } from './ui-map.js';
 
 const STEPS = ['Drone', 'Where', 'Goal', 'Quality', 'Site', 'Fly', 'After'];
 // Inputs that change the generated waypoints.
 export const PLAN_IDS = ['camera', 'camW', 'camH', 'camF', 'camPx', 'alt', 'speed', 'front', 'side', 'angle', 'overshoot', 'margin', 'marginAuto',
-  'gimbal', 'terrain', 'densify', 'tol', 'captureMode', 'crosshatch', 'oblique', 'orbitRadius', 'bldgHeight', 'corridorWidth'];
+  'gimbal', 'terrain', 'densify', 'tol', 'captureMode', 'crosshatch', 'oblique', 'orbitRadius', 'bldgHeight', 'corridorWidth',
+  'trees', 'speedAuto', 'lockHeading', 'rangeSplit', 'maxRange', 'turnMode'];
 
 const anyGeometry = () => areaList().length > 0 || !!state.center || state.line.length >= 2 || state.waypoints.length > 0;
 
@@ -67,12 +68,12 @@ function buildGoals() {
 
 function qualityLevel() {
   const s = settings();
-  const m = qualityMatch(state.goal, s.alt, s.front, s.side);
+  const m = qualityMatch(state.goal, s.alt, s.front, s.side, s.trees);
   return m >= 0 ? m : +$('quality').value;
 }
 
 export function applyQuality(level = +$('quality').value) {
-  const p = qualityParams(state.goal, level);
+  const p = qualityParams(state.goal, level, $('trees').checked);
   $('quality').value = level;
   setLen('alt', p.alt);
   $('front').value = p.front;
@@ -171,9 +172,10 @@ function renderResult() {
   const rows = [
     ['Detail', detailWords(gsd, state.unit)],
     ['Photos', `${photoEstimate(missions)}${p?.captureMode === 'timer' ? ' (timer)' : ''}`],
-    ['Flight time', fmtTime(total)],
+    ['Flight time', `${fmtTime(total)} at ${fmtSpeed(p?.speed ?? s.speed)}`],
     ['Batteries', `${missions.length} (one per mission) + 1 spare`],
     ['Missions', missions.length],
+    ...(state.launches?.length ? [['Launch points', `${state.launches.length} (L1 to L${state.launches.length} on the map)`]] : []),
     ['Flying height', p?.goal === 'orbit' ? `${fmtLen(Math.min(...wps.map(w => w.height)))} to ${fmtLen(Math.max(...wps.map(w => w.height)))} above takeoff` : `${fmtLen(s.alt)} above the ground`],
   ];
   box.innerHTML = `<dl class="stats">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
@@ -198,9 +200,16 @@ export function renderWizard() {
   document.querySelectorAll('[data-goal]').forEach(b => b.classList.toggle('sel', b.dataset.goal === state.goal));
   document.querySelectorAll('[data-for]').forEach(el => { el.hidden = !el.dataset.for.split(' ').includes(state.goal); });
   $('qualityBox').hidden = state.goal === 'orbit';
-  const lvl = qualityMatch(state.goal, s.alt, s.front, s.side);
+  const lvl = qualityMatch(state.goal, s.alt, s.front, s.side, s.trees);
   $('qualityName').textContent = lvl >= 0 ? QUALITY[lvl].label : 'Custom';
   if (lvl >= 0) $('quality').value = lvl;
+  const gm = gridMetrics(s.cam, s.alt, s.front, s.side);
+  $('qualityInfo').textContent = `${fmtLen(s.alt)} high · ${fmtSmall(gm.gsd, state.unit)} per pixel · ${s.front}/${s.side}% overlap`;
+  $('maxRange').disabled = !s.rangeSplit;
+  const nl = state.launches?.length;
+  $('rangeNote').textContent = !s.rangeSplit ? '' : nl
+    ? `This area is split into ${nl} zones, each flown from its own launch point (L1 to L${nl} on the map). Drag them to places you can reach.`
+    : state.waypoints.length && state.generated ? `The whole plan stays within ${fmtLen(s.maxRange)} of the takeoff point.` : '';
   document.querySelectorAll('#dirSeg button').forEach(b => b.classList.toggle('active', b.dataset.dir === state.dir));
   $('angleWrap').hidden = state.dir !== 'custom';
   $('angleVal').textContent = `${currentAngle()}°`;
@@ -255,6 +264,7 @@ export function initWizard() {
   $('targetBatteries').onchange = applyBatteryTarget;
   $('alt').addEventListener('change', () => say(''));
   $('quality').oninput = () => { say(''); applyQuality(); saveSettings(); emit('render'); emit('plan', {}); };
+  $('trees').addEventListener('change', () => { applyQuality(+$('quality').value); saveSettings(); emit('render'); emit('plan', {}); });
   document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => setUi(b.dataset.ui === 'easy'));
   document.querySelectorAll('#dirSeg button').forEach(b => b.onclick = () => {
     state.dir = b.dataset.dir;

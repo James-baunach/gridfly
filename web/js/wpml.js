@@ -343,7 +343,9 @@ function fillPlacemark(doc, pm, wp, index, kind, opts, nextGroupId) {
     setKid(pm, 'useGlobalHeadingParam', 0);
   }
 
-  const turn = TURN_MODES[opts.turnMode];
+  // Corners (line ends, detours) always stop: flying through them makes DJI Fly round the turn,
+  // cutting the corner and taking photos while the drone banks round.
+  const turn = TURN_MODES[wp.corner && opts.turnMode === 'straight-pass' ? 'straight-stop' : opts.turnMode];
   if (turn) {
     let tp = kid(pm, 'waypointTurnParam');
     if (!tp) { tp = make(doc, 'waypointTurnParam'); pm.appendChild(tp); }
@@ -404,7 +406,8 @@ function updateDoc(doc, waypoints, kind, opts) {
 
 /**
  * Build a DJI Fly compatible KMZ.
- * @param waypoints [{lat, lon, height, speed, photo, gimbalPitch, actions, heading?}] (heading: fixed yaw in degrees clockwise from north)
+ * @param waypoints [{lat, lon, height, speed, photo, gimbalPitch, actions, heading?, corner?}] (heading: fixed yaw in degrees clockwise from north;
+ *                  corner: the path turns here, so the drone stops even when the path style flies through points)
  * @param opts {turnMode, finishAction, rcLostAction, speed, headingMode, distance, duration, droneEnum, droneSub, gimbalEvery,
  *             hoverSeconds (hover this long before each generated takePhoto)}
  * @param source result of readFile() for the mission being edited (or a placeholder from the controller), or null

@@ -12,23 +12,52 @@ export const GOALS = {
   corridor: { title: 'Road / river / fence line', text: 'A strip of passes along a line you draw.', front: 75, side: 65 },
 };
 
+// Quality steps, quickest first. Low steps fly at the usual 400 ft ceiling with the least overlap a
+// map still stitches with; each step up flies lower (finer detail) and adds overlap only where it helps.
+// `d` is added to the goal's front and side overlap.
 export const QUALITY = [
+  { id: 'quickest', label: 'Quickest', alt: 120, d: -5 },
+  { id: 'veryfast', label: 'Very fast', alt: 105, d: -5 },
   { id: 'fast', label: 'Fast', alt: 90, d: -5 },
+  { id: 'quick', label: 'Quick', alt: 80, d: -3 },
   { id: 'balanced', label: 'Balanced', alt: 70, d: 0 },
-  { id: 'detailed', label: 'Detailed', alt: 50, d: 5 },
+  { id: 'fine', label: 'Fine', alt: 55, d: 0 },
+  { id: 'detailed', label: 'Detailed', alt: 45, d: 5 },
+  { id: 'max', label: 'Most detail', alt: 35, d: 5 },
 ];
+export const DEFAULT_QUALITY = 4;
 
-export function qualityParams(goal, level) {
-  const g = GOALS[goal] || GOALS.grid, q = QUALITY[level] || QUALITY[1];
-  return { alt: q.alt, front: g.front + q.d, side: g.side + q.d };
+// Trees and crops move and look alike from above, so stitching needs more overlap over them.
+export const TREE_OVERLAP = 5;
+
+export function qualityParams(goal, level, trees = false) {
+  const g = GOALS[goal] || GOALS.grid, q = QUALITY[level] || QUALITY[DEFAULT_QUALITY];
+  const t = trees ? TREE_OVERLAP : 0;
+  return { alt: q.alt, front: Math.min(90, g.front + q.d + t), side: Math.min(85, g.side + q.d + t) };
 }
 
 // Index of the quality preset matching these values, or -1 when custom.
-export function qualityMatch(goal, alt, front, side) {
+export function qualityMatch(goal, alt, front, side, trees = false) {
   return QUALITY.findIndex((_, i) => {
-    const p = qualityParams(goal, i);
+    const p = qualityParams(goal, i, trees);
     return Math.abs(p.alt - alt) < 0.5 && p.front === front && p.side === side;
   });
+}
+
+// ---------- Automatic speed ----------
+
+export const MAX_AUTO_SPEED = 12;   // m/s; DJI Fly allows 15, but this leaves headroom for wind and battery
+export const MIN_PHOTO_GAP = 2.5;   // s between photos the camera can keep up with while flying
+
+/**
+ * The fastest speed (m/s, rounded down to 0.5) that still gives sharp, evenly spaced photos:
+ * no more than `maxBlur` pixels of smear at a 1/`shutter` s exposure when photos are taken on the move,
+ * and at least MIN_PHOTO_GAP seconds between photos.
+ */
+export function autoSpeed(metrics, { moving = true, maxBlur = 0.5, shutter = 1000, cap = MAX_AUTO_SPEED } = {}) {
+  const byGap = metrics.photoSpacing / MIN_PHOTO_GAP;
+  const byBlur = moving ? maxBlur * metrics.gsd / 100 * shutter : Infinity;
+  return Math.max(1, Math.floor(Math.min(cap, byGap, byBlur) * 2) / 2);
 }
 
 export function detailWords(gsdCm, unit = 'm') {
