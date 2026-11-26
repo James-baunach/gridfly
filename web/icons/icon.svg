@@ -1,5 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#1f6feb"/>
-  <path d="M140 150H372V226H140V302H372V378H140" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
-  <g fill="#ffd60a"><circle cx="140" cy="150" r="22"/><circle cx="256" cy="226" r="18"/><circle cx="256" cy="302" r="18"/><circle cx="140" cy="378" r="22"/></g>
+  <rect width="512" height="512" rx="120" fill="#0c1611"/>
+  <g stroke="#c6f135" stroke-opacity=".13" stroke-width="4">
+    <path d="M96 140H416M96 220H416M96 300H416M96 380H416M136 96V416M216 96V416M296 96V416M376 96V416"/>
+  </g>
+  <g transform="translate(-14 20)">
+  <path d="M136 140H376V220H136V300H292" fill="none" stroke="#c6f135" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(368 300)">
+    <g stroke="#c6f135" stroke-width="12" stroke-linecap="round"><path d="M-34 -34L34 34M34 -34L-34 34"/></g>
+    <g fill="#0c1611" stroke="#c6f135" stroke-width="10"><circle cx="-36" cy="-36" r="20"/><circle cx="36" cy="-36" r="20"/><circle cx="-36" cy="36" r="20"/><circle cx="36" cy="36" r="20"/></g>
+    <rect x="-17" y="-17" width="34" height="34" rx="9" fill="#c6f135"/>
+  </g>
+  </g>
 </svg>

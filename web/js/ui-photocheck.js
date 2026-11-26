@@ -9,6 +9,7 @@ import { coverageCellSize } from './presets.js';
 import { $, state, areaList, keepoutList, emit, toast, esc } from './state.js';
 import { settings, pushUndo, currentAngle, applyHeights } from './plan.js';
 import { layers, map, fitTo } from './ui-map.js';
+import { setPhotos } from './ui-mapmake.js';
 
 let last = null, running = false;
 const canvas = L.canvas({ padding: 0.3 });
@@ -38,6 +39,7 @@ export async function runPhotoCheck(fileList) {
     last = { cellM, polygon, res: await analyzePhotos(files, { polygon, areas: extra, keepouts, cam: settings().cam, home: state.home, cellM, onProgress: n => { bar.value = n; } }) };
     drawCoverage();
     fitTo(polygon);
+    setPhotos(files, last.res.photos);
   } catch (e) {
     last = null;
     $('photoResult').innerHTML = `<p class="small">The photo check failed: ${esc(e.message)}</p>`;
@@ -71,7 +73,7 @@ function renderResult() {
     ${blurry.length ? `<details><summary>${blurry.length} blurry photo${blurry.length > 1 ? 's' : ''}</summary><p class="small">${blurry.slice(0, 40).map(esc).join(', ')}${blurry.length > 40 ? ', …' : ''}</p></details>` : ''}
     <div class="row">${res.coverage.gaps.length ? `<button id="btnRefly" class="primary" title="Make a new mission that flies only over the gaps">Re-fly gaps (${res.coverage.gaps.length})</button><button id="btnReflyAdd" title="Add the gap passes to the end of your current mission">Add gaps to mission</button>` : ''}
       <button id="btnHideCov">Hide overlay</button></div>
-    <p class="small">Next: process the photos into a map or 3D model with <a href="https://www.opendronemap.org/webodm/" target="_blank" rel="noopener">WebODM</a> (free, open source). Put the photos from all missions in one project.</p>`;
+    <p class="small">Next: turn the photos into a map, below. Put the photos from all missions in at once.</p>`;
   const b = id => $(id);
   if (b('btnRefly')) b('btnRefly').onclick = () => reflyGaps(false);
   if (b('btnReflyAdd')) b('btnReflyAdd').onclick = () => reflyGaps(true);

@@ -18,6 +18,8 @@ import { initPhotoCheck, runPhotoCheck } from './ui-photocheck.js';
 import { initProject, restoreLast, openProjectFile, newProject, toggleProjects } from './ui-project.js';
 import { initHelp, toggleHelp } from './ui-help.js';
 import { initOffline, toggle as toggleOffline } from './ui-offline.js';
+import { initShell } from './ui-shell.js';
+import { initMapMake } from './ui-mapmake.js';
 
 const { settings, pushUndo, undo, redo, loadFile, saveSettings, SETTING_IDS } = plan;
 
@@ -90,7 +92,8 @@ function renderStats() {
   ] : [['Waypoints', 0]];
   $('stats').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 
-  const warn = [];
+  const warn = [], notes = new Set();
+  const note = w => { notes.add(w); warn.push(w); };
   if (wps.length) {
     warn.push(...keepoutWarnings(wps, missions));
     const r = plan.enforceTurnMode();
@@ -115,13 +118,15 @@ function renderStats() {
     const tooFar = missions.filter(m => m.far > s.maxRange * 1.02);
     if (tooFar.length) warn.push(`${tooFar.length === 1 ? `Mission ${tooFar[0].index + 1} goes` : `Missions ${tooFar.map(m => m.index + 1).join(', ')} go`} up to ${fmtLen(Math.max(...tooFar.map(m => m.far)))} from ${state.launches ? 'its launch point' : 'the takeoff point'}, beyond your ${fmtLen(s.maxRange)} signal range.` +
       (s.rangeSplit ? ' Move the takeoff or launch point closer, or re-plan.' : ' Turn on "Split big areas by signal range" to get launch points.'));
-    if (missions.length > 1) warn.push(state.launches
+    if (missions.length > 1) note(state.launches
       ? `Split into ${missions.length} missions flown from ${state.launches.length} launch points (max ${s.maxWp} waypoints${s.maxMin ? ` / ${s.maxMin} min` : ''} each). Each file name ends in its launch point (L1, L2…): take off from that spot, one battery per mission.`
       : `Split into ${missions.length} missions (max ${s.maxWp} waypoints${s.maxMin ? ` / ${s.maxMin} min` : ''} each). Fly them in order from the same takeoff point, one battery each.`);
-    if (!state.source && !HELPER_CONTROLLERS.includes(s.controller)) warn.push('Not based on a DJI Fly file, so GridFly uses built-in drone settings. If DJI Fly refuses the mission, open a KMZ saved by your drone first.');
+    if (!state.source && !HELPER_CONTROLLERS.includes(s.controller)) note('Not based on a DJI Fly file, so GridFly uses built-in drone settings. If DJI Fly refuses the mission, open a KMZ saved by your drone first.');
     if (state.source?.info.heightMode && state.source.info.heightMode !== 'relativeToStartPoint') warn.push(`This file uses "${state.source.info.heightMode}" heights; GridFly treats heights as relative to takeoff.`);
   }
   $('warnings').innerHTML = warn.map(w => `<li>${esc(w)}</li>`).join('');
+  // For the mission card: notes are information, everything else is worth a look before flying.
+  state.health = { issues: warn.filter(w => !notes.has(w)), notes: warn.filter(w => notes.has(w)) };
 }
 
 function renderProfile() {
@@ -291,12 +296,6 @@ function bind() {
     });
   }
 
-  // Phones: make the map bigger or smaller.
-  $('btnMapSize').onclick = () => {
-    const big = document.body.classList.toggle('mapbig');
-    $('btnMapSize').textContent = big ? '⤡' : '⤢';
-    $('btnMapSize').setAttribute('aria-label', big ? 'Make the map smaller' : 'Make the map bigger');
-  };
 }
 
 // Missions, projects or photos, dropped or opened.
@@ -325,9 +324,11 @@ bind();
 initWizard();
 initSiteCheck();
 initPhotoCheck();
+initMapMake();
 initProject();
 initInstall();
 initOffline();
+initShell();
 emit('render');
 restoreLast().then(restored => initHelp({ firstRun: !restored }));
 

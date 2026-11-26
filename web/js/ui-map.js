@@ -11,7 +11,8 @@ import * as store from './store.js';
 // Bigger handles for fingers on phones and tablets.
 const COARSE = window.matchMedia?.('(pointer: coarse)').matches;
 
-export const map = L.map('map', { doubleClickZoom: false, zoomControl: true }).setView([39.5, -98.35], 4);
+export const map = L.map('map', { doubleClickZoom: false, zoomControl: false }).setView([39.5, -98.35], 4);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
 // crossOrigin lets the service worker keep the tiles for offline use (see sw.js).
 const tileOpts = t => ({ maxZoom: 21, maxNativeZoom: MAX_NATIVE_ZOOM, attribution: t.attribution, crossOrigin: true });
 const satellite = L.tileLayer(TILE_LAYERS.satellite.url, tileOpts(TILE_LAYERS.satellite)).addTo(map);
@@ -39,7 +40,21 @@ export function fitTo(points) {
   if (!points.length) return;
   map.invalidateSize();
   if (!map.getSize().x) { pendingFit = points; return; }
-  map.fitBounds(L.latLngBounds(points.map(ll)).pad(0.15), { maxZoom: 19 });
+  const pad = overlayPadding();
+  map.fitBounds(L.latLngBounds(points.map(ll)).pad(0.12), { maxZoom: 19, paddingTopLeft: pad.tl, paddingBottomRight: pad.br });
+}
+
+// The top bar and the panel float over the map: keep fitted shapes clear of them.
+function overlayPadding() {
+  const m = map.getContainer().getBoundingClientRect();
+  const tb = document.getElementById('topbar')?.getBoundingClientRect();
+  const p = document.getElementById('panel')?.getBoundingClientRect();
+  const shown = p && p.width > 0 && !document.body.classList.contains('panel-hidden');
+  const phone = window.matchMedia('(max-width: 699px)').matches;
+  const top = tb ? Math.max(0, tb.bottom - m.top) + 8 : 0;
+  const left = shown && !phone ? Math.max(0, p.right - m.left) + 8 : 0;
+  const bottom = shown && phone ? Math.max(0, m.bottom - p.top) + 8 : 0;
+  return { tl: [left, top], br: [0, bottom] };
 }
 // A map that was laid out after a fit was requested (hidden tab, slow CSS) gets fitted once it has a size.
 new ResizeObserver(() => { map.invalidateSize(); if (pendingFit && map.getSize().x) { const p = pendingFit; pendingFit = null; fitTo(p); } }).observe(map.getContainer());
@@ -93,6 +108,7 @@ export function setMode(mode) {
   shape ? map.dragging.disable() : map.dragging.enable();
   map.getContainer().style.cursor = state.mode ? 'crosshair' : '';
   renderArea();
+  emit('mode', state.mode);
 }
 
 // Picks the goal that fits a freshly drawn shape.
