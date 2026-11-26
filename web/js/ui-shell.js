@@ -18,10 +18,15 @@ const isPhone = () => window.matchMedia('(max-width: 699px)').matches;
 
 export const view = () => root.dataset.view;
 
+// Some hosts (sandboxed previews) refuse history changes: the view still switches, only the address stays.
+function setUrl(url, replace = false) {
+  try { replace ? history.replaceState(null, '', url) : history.pushState(null, '', url); } catch { /* address unchanged */ }
+}
+
 export function showView(v, { push = true } = {}) {
   if (v === view()) return;
   root.dataset.view = v;
-  if (push) history.pushState(null, '', v === 'app' ? '#plan' : location.pathname + location.search);
+  if (push) setUrl(v === 'app' ? '#plan' : location.pathname + location.search);
   if (v === 'app') {
     map.invalidateSize();
     layoutSheet();
@@ -111,7 +116,7 @@ const DEMO = [
 export async function runDemo() {
   setPref('tourDone', true); // the demo explains itself; the tour stays in the menu
   await newProject();
-  if (location.hash.startsWith('#demo')) history.replaceState(null, '', '#plan');
+  if (location.hash.startsWith('#demo')) setUrl('#plan', true);
   state.goal = 'grid';
   emit('goal');
   state.polygon = DEMO.map(p => ({ ...p }));
