@@ -10,7 +10,13 @@ import { $, state, areaList, keepoutList, on, emit, toast, esc, debounce, setPre
 import { settings, saveSettings, generate, applyHeights, computeMissions, missionsForAlt, missingInput, geometryReady, photoEstimate, currentAngle } from './plan.js';
 import { startTool, setMode } from './ui-map.js';
 
-const STEPS = ['Drone', 'Where', 'Goal', 'Quality', 'Site', 'Fly', 'After'];
+const STEPS = ['Drone', 'Where', 'Goal', 'Quality', 'Site check', 'Install', 'Photos & map'];
+// The seven steps fall into three phases: at home (plan), before the flight (prepare) and after it.
+const PHASES = [
+  { name: 'Plan', steps: [1, 2, 3, 4], idle: 'Area, goal, quality' },
+  { name: 'Prepare', steps: [5, 6], idle: 'Site check, install' },
+  { name: 'Fly back', steps: [7], idle: 'Photos and map' },
+];
 // Inputs that change the generated waypoints.
 export const PLAN_IDS = ['camera', 'camW', 'camH', 'camF', 'camPx', 'alt', 'speed', 'front', 'side', 'angle', 'overshoot', 'margin', 'marginAuto',
   'gimbal', 'terrain', 'densify', 'tol', 'captureMode', 'crosshatch', 'oblique', 'orbitRadius', 'bldgHeight', 'corridorWidth',
@@ -45,10 +51,12 @@ export function goStep(n) {
   setPref('step', n);
   if (n === 5) emit('plan', {});
   renderWizard();
+  emit('step', n);
 }
 
 function buildNav() {
-  $('stepper').innerHTML = STEPS.map((t, i) => `<button data-go="${i + 1}" title="Step ${i + 1}: ${t}"><b>${i + 1}</b><span>${t}</span></button>`).join('');
+  $('stepper').innerHTML = PHASES.map(p => `<button class="phase" data-go="${p.steps[0]}" title="${p.steps.map(n => `${n}. ${STEPS[n - 1]}`).join(', ')}">
+    <b>${p.name}</b><small></small><span class="dots">${p.steps.map(n => `<i data-dot="${n}"></i>`).join('')}</span></button>`).join('');
   $('stepper').onclick = e => { const b = e.target.closest('[data-go]'); if (b) goStep(+b.dataset.go); };
   document.querySelectorAll('.step').forEach(sec => {
     const n = +sec.dataset.step;
@@ -225,10 +233,17 @@ export function renderWizard() {
   $('btnGenerate').hidden = state.easy && !(state.waypoints.length && !state.generated && geometryReady());
   $('btnGenerate').textContent = state.easy ? 'Re-plan (discard my hand edits)' : 'Generate flight plan';
 
-  document.querySelectorAll('#stepper button').forEach(b => {
-    const n = +b.dataset.go;
-    b.classList.toggle('cur', n === state.step);
-    b.classList.toggle('done', n < state.step);
+  document.querySelectorAll('#stepper .phase').forEach((b, k) => {
+    const p = PHASES[k], cur = p.steps.includes(state.step);
+    b.classList.toggle('cur', cur);
+    b.querySelector('small').textContent = cur
+      ? (p.steps.length > 1 ? `${p.steps.indexOf(state.step) + 1} of ${p.steps.length} · ${STEPS[state.step - 1]}` : STEPS[state.step - 1])
+      : p.idle;
+    b.querySelectorAll('[data-dot]').forEach(d => {
+      const n = +d.dataset.dot;
+      d.classList.toggle('cur', n === state.step);
+      d.classList.toggle('done', n < state.step);
+    });
   });
   document.querySelectorAll('.step').forEach(sec => {
     const n = +sec.dataset.step, why = canNext(n), next = sec.querySelector('[data-nav="1"]');

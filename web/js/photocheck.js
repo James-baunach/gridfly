@@ -78,7 +78,7 @@ function xmpNum(xml, name) {
 
 /** Parse EXIF + DJI XMP from the head of a JPEG. Missing values are null. */
 export function readPhotoMeta(buf) {
-  const meta = { lat: null, lon: null, absAlt: null, relAlt: null, gimbalPitch: null, yaw: null, time: null, width: null, height: null, focal: null };
+  const meta = { lat: null, lon: null, absAlt: null, relAlt: null, gimbalPitch: null, yaw: null, gimbalYaw: null, time: null, width: null, height: null, focal: null };
   let gpsAlt = null, xmp = '';
   try {
     const dv = new DataView(buf instanceof ArrayBuffer ? buf : buf.buffer, buf.byteOffset || 0, buf.byteLength);
@@ -110,7 +110,8 @@ export function readPhotoMeta(buf) {
     meta.relAlt = xmpNum(xmp, 'RelativeAltitude');
     meta.absAlt = xmpNum(xmp, 'AbsoluteAltitude');
     meta.gimbalPitch = xmpNum(xmp, 'GimbalPitchDegree');
-    meta.yaw = xmpNum(xmp, 'FlightYawDegree') ?? xmpNum(xmp, 'GimbalYawDegree');
+    meta.gimbalYaw = xmpNum(xmp, 'GimbalYawDegree');
+    meta.yaw = xmpNum(xmp, 'FlightYawDegree') ?? meta.gimbalYaw;
     if (meta.lat == null) {
       const la = xmpNum(xmp, 'GpsLatitude'), lo = xmpNum(xmp, 'GpsLongitude') ?? xmpNum(xmp, 'GpsLongtitude');
       if (la != null && lo != null) { meta.lat = la; meta.lon = lo; }

@@ -9,7 +9,7 @@
  * - Everything else (the USB helper's /api/, weather and other services) goes straight to the network;
  *   the app keeps its own offline copies of that data in IndexedDB.
  */
-const VERSION = '2026-11-23.1';
+const VERSION = '2026-11-26.1';
 const SHELL_CACHE = 'gridfly-shell-' + VERSION;
 const TILES_SAVED = 'gridfly-tiles-saved';
 const TILES_SEEN = 'gridfly-tiles-seen';
@@ -19,6 +19,7 @@ const SHELL = [
   './',
   'index.html',
   'styles.css',
+  'home.css',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-192.png',
@@ -26,6 +27,9 @@ const SHELL = [
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
   'js/app.js',
+  'js/mosaic.js',
+  'js/ui-mapmake.js',
+  'js/ui-shell.js',
   'js/avoid.js',
   'js/blur.js',
   'js/checklist.js',

@@ -1,6 +1,6 @@
 // "?" tooltips, the keyboard shortcuts dialog and the first-run tour.
 
-import { $, state, emit, pref, setPref } from './state.js';
+import { $, state, emit, on, pref, setPref } from './state.js';
 
 // ---------- Tooltips ----------
 
@@ -41,10 +41,10 @@ export function toggleHelp(show = $('help').hidden) { $('help').hidden = !show; 
 // ---------- Tour ----------
 
 const TOUR = [
-  { title: 'Welcome to GridFly', step: 1, text: 'GridFly plans photo-mapping flights for your Mavic 3. Follow the numbered steps in the panel, one at a time. Pick your drone and controller first.' },
-  { title: 'Mark the area', step: 2, text: 'Search for your site, then draw the area on the satellite map: a polygon, a rectangle or a circle. Drag the orange corners to adjust. The flight plan updates by itself.' },
-  { title: 'Pick a goal and a quality', step: 4, text: 'Choose what you are mapping, then slide between Fast and Detailed. GridFly shows in plain words how sharp the map will be, how long it takes and how many batteries you need.' },
-  { title: 'Check, install, fly, check again', step: 6, text: 'GridFly checks the weather, airspace and obstacles, helps you get the mission onto your controller, and gives you a checklist. After flying, drop your photos into step 7 to find any gaps.' },
+  { title: 'Welcome to GridFly', step: 1, text: 'GridFly plans photo-mapping flights for DJI Fly drones. The panel takes you through three phases: Plan, Prepare and Fly back. Start by picking your drone and controller.' },
+  { title: 'Mark the area', step: 2, text: 'Search for your site at the top, then tap Map this view to plan what the map shows, or draw a polygon, rectangle or circle. Drag the orange corners to adjust. The plan updates by itself.' },
+  { title: 'One card tells you everything', step: 4, text: 'The card at the top of the panel shows the flight time, batteries and detail, whether the mission is ready to fly, and the next thing to do. Slide Quality to trade speed for detail.' },
+  { title: 'Check, install, fly, map', step: 6, text: 'GridFly checks the weather, airspace and obstacles, gets the mission onto your controller and gives you a checklist. After flying, drop the photos in to find gaps and make a quick map. Everything else is in the menu (top right).' },
 ];
 let tourAt = 0;
 
@@ -74,5 +74,11 @@ export function initHelp({ firstRun }) {
   $('btnTour').onclick = startTour;
   $('btnTourSkip').onclick = endTour;
   $('btnTourNext').onclick = () => { if (++tourAt >= TOUR.length) endTour(); else showTour(); };
-  if (firstRun && !pref('tourDone', false)) setTimeout(startTour, 500);
+  if (firstRun && !pref('tourDone', false)) {
+    // Only in the planner: the home page explains itself.
+    let shown = false;
+    const go = () => { if (!shown && document.documentElement.dataset.view === 'app') { shown = true; setTimeout(() => { if (!pref('tourDone', false)) startTour(); }, 500); } };
+    go();
+    on('view', go);
+  }
 }
